@@ -1,4 +1,5 @@
 import json
+import re
 
 from agents import Agent, Runner, function_tool
 
@@ -50,6 +51,52 @@ def list_promotable_stock(limit: int = 8) -> str:
     """List in-stock eBay items that are ready to promote."""
     items = get_repository().all_promotable(limit=limit)
     return json.dumps([_item_summary(item) for item in items])
+
+
+STOPWORDS = {
+    "about",
+    "available",
+    "carry",
+    "have",
+    "hello",
+    "iphone",
+    "iphones",
+    "need",
+    "please",
+    "stock",
+    "there",
+    "with",
+    "you",
+    "your",
+}
+
+
+def _candidate_inventory_queries(message: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z0-9]+", message.lower())
+    candidates: list[str] = []
+    for token in tokens:
+        normalized = token[:-1] if token.endswith("s") and len(token) > 4 else token
+        if normalized == "iphon":
+            normalized = "iphone"
+        if normalized in STOPWORDS and normalized != "iphone":
+            continue
+        if len(normalized) < 3:
+            continue
+        if normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def _matched_items_for_message(message: str):
+    repository = get_repository()
+    matched_items = repository.search(message, limit=3)
+    if matched_items:
+        return matched_items
+    for query in _candidate_inventory_queries(message):
+        matched_items = repository.search(query, limit=3)
+        if matched_items:
+            return matched_items
+    return []
 
 
 CUSTOMER_AGENT_INSTRUCTIONS = """
@@ -114,7 +161,7 @@ async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer
         f"{json.dumps(context, indent=2)}"
     )
     result = await Runner.run(_customer_agent(), prompt, max_turns=5)
-    matched_items = get_repository().search(question.message, limit=3)
+    matched_items = _matched_items_for_message(question.message)
     reply = str(result.final_output).strip()
     needs_human = any(keyword in question.message.lower() for keyword in ["refund", "return", "order", "tracking", "complaint"])
     return CustomerAnswer(

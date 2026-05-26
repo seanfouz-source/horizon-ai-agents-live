@@ -2,7 +2,7 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from app.agents import answer_customer_question, create_social_drafts
 from app.config import get_settings
@@ -10,6 +10,7 @@ from app.ebay import EbayClient
 from app.integrations import extract_customer_message, manychat_dynamic_response, normalize_channel, zapier_social_drafts_response
 from app.inventory import InventoryRepository
 from app.inventory_seed import seed_inventory_if_empty
+from app.media import product_card_for_item
 from app.models import CustomerQuestion, EbayStoreImportRequest, InventoryItem, InventorySearchResult, SocialDraftRequest
 from app.store_sync import StorePageSyncer
 
@@ -44,6 +45,18 @@ async def startup_store_page_sync() -> None:
 def search_inventory(q: str = "", limit: int = 8) -> InventorySearchResult:
     items = repository.search(q, limit=limit)
     return InventorySearchResult(total=len(items), items=items)
+
+
+@app.get("/media/products/{sku}.png")
+def product_media(sku: str) -> Response:
+    item = repository.get(sku)
+    if item is None:
+        raise HTTPException(status_code=404, detail="No inventory item found for that SKU.")
+    return Response(
+        content=product_card_for_item(item),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @app.post("/inventory/import")

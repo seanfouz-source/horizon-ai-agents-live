@@ -1,8 +1,8 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.integrations import default_metricool_publication_time, zapier_social_drafts_response
-from app.models import SocialDraftBatch
+from app.integrations import default_metricool_publication_time, metricool_payload, zapier_social_drafts_response
+from app.models import SocialDraftBatch, SocialDraftRequest, SocialPost
 
 
 def test_zapier_social_drafts_response_adds_flat_metricool_fields():
@@ -93,6 +93,20 @@ def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
 
     assert response["metricool_instagram"] is True
     assert response["metricool_tiktok"] is True
+
+
+def test_metricool_payload_adds_generated_product_media_url():
+    payload = metricool_payload(
+        SocialPost(
+            platform="instagram",
+            text="Shop this listing.",
+            product_sku="EBAY-123",
+            product_title="Demo Phone",
+        ),
+        SocialDraftRequest(brand_name="ExactSpec"),
+    )
+
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.png"
 
 
 def test_default_metricool_publication_time_uses_next_busy_slot():

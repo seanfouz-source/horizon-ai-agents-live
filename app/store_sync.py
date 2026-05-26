@@ -6,6 +6,7 @@ import httpx
 from app.config import Settings
 from app.ebay_store_page import fetch_store_page_items
 from app.inventory import InventoryRepository
+from app.inventory_seed import load_inventory_csv
 
 
 class StorePageSyncer:
@@ -40,43 +41,60 @@ class StorePageSyncer:
         try:
             items = await fetch_store_page_items(target_url, max_pages=page_count)
         except httpx.HTTPStatusError as exc:
+            fallback = self._refresh_seed_fallback()
             self.last_status = {
                 "source": "ebay-store-page",
                 "store_url": target_url,
-                "status": "failed",
-                "imported": 0,
-                "message": f"eBay returned HTTP {exc.response.status_code}; kept existing inventory.",
+                "status": "fallback" if fallback["available"] else "failed",
+                "imported": fallback["imported"],
+                "inventory_count": fallback["inventory_count"],
+                "message": self._fallback_message(
+                    f"eBay returned HTTP {exc.response.status_code}",
+                    fallback,
+                ),
                 "last_attempt_at": attempted_at,
             }
             return self.last_status
         except httpx.HTTPError as exc:
+            fallback = self._refresh_seed_fallback()
             self.last_status = {
                 "source": "ebay-store-page",
                 "store_url": target_url,
-                "status": "failed",
-                "imported": 0,
-                "message": f"Could not reach eBay store page: {exc.__class__.__name__}; kept existing inventory.",
+                "status": "fallback" if fallback["available"] else "failed",
+                "imported": fallback["imported"],
+                "inventory_count": fallback["inventory_count"],
+                "message": self._fallback_message(
+                    f"Could not reach eBay store page: {exc.__class__.__name__}",
+                    fallback,
+                ),
                 "last_attempt_at": attempted_at,
             }
             return self.last_status
         except Exception as exc:
+            fallback = self._refresh_seed_fallback()
             self.last_status = {
                 "source": "ebay-store-page",
                 "store_url": target_url,
-                "status": "failed",
-                "imported": 0,
-                "message": f"Store page sync failed with {exc.__class__.__name__}; kept existing inventory.",
+                "status": "fallback" if fallback["available"] else "failed",
+                "imported": fallback["imported"],
+                "inventory_count": fallback["inventory_count"],
+                "message": self._fallback_message(
+                    f"Store page sync failed with {exc.__class__.__name__}",
+                    fallback,
+                ),
                 "last_attempt_at": attempted_at,
             }
             return self.last_status
 
         if not items:
+            fallback = self._refresh_seed_fallback()
             self.last_status = {
                 "source": "ebay-store-page",
                 "store_url": target_url,
-                "status": "empty",
-                "imported": 0,
-                "message": "No public listing cards were found; kept existing inventory.",
+                "status": "fallback" if fallback["available"] else "empty",
+                "imported": fallback["imported"],
+                "inventory_count": fallback["inventory_count"],
+                "message": self._fallback_message("No public listing cards were found", fallback),
                 "last_attempt_at": attempted_at,
             }
             return self.last_status
@@ -87,7 +105,32 @@ class StorePageSyncer:
             "store_url": target_url,
             "status": "ok",
             "imported": count,
+            "inventory_count": self.repository.count(),
             "message": f"Imported {count} public eBay listings.",
             "last_attempt_at": attempted_at,
         }
         return self.last_status
+
+    def _refresh_seed_fallback(self) -> dict[str, int | bool]:
+        seed_path = getattr(self.settings, "seed_inventory_csv", None)
+        imported = 0
+        available = False
+        if seed_path and seed_path.exists():
+            items = load_inventory_csv(seed_path)
+            imported = self.repository.upsert_items(items)
+            available = bool(items)
+        inventory_count = self.repository.count()
+        return {
+            "available": available or inventory_count > 0,
+            "imported": imported,
+            "inventory_count": inventory_count,
+        }
+
+    @staticmethod
+    def _fallback_message(reason: str, fallback: dict[str, int | bool]) -> str:
+        if fallback["available"]:
+            return (
+                f"{reason}; refreshed fallback inventory from the seed/cache "
+                f"and kept {fallback['inventory_count']} items available."
+            )
+        return f"{reason}; no fallback inventory is available."

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     ebay_store_max_pages: int = 3
     sync_store_page_on_startup: bool = True
     seed_inventory_csv: Path | None = BASE_DIR / "data" / "exactspec_public_store.csv"
+    public_base_url: str = "https://horizon-ai-agents.onrender.com"
     database_path: Path = BASE_DIR / "data" / "horizon_agents.db"
 
     @property
