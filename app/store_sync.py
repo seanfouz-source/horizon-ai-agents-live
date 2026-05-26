@@ -77,11 +77,11 @@ class StorePageSyncer:
             }
             return self.last_status
 
-        fallback = self._refresh_seed_fallback()
+        fallback = self._fallback_inventory()
         self.last_status = {
             "source": "ebay-store-page",
             "store_url": target_url,
-            "status": "fallback" if fallback["available"] else "failed",
+            "status": fallback["status"],
             "imported": fallback["imported"],
             "inventory_count": fallback["inventory_count"],
             "message": self._fallback_message(last_failure, fallback),
@@ -89,7 +89,17 @@ class StorePageSyncer:
         }
         return self.last_status
 
-    def _refresh_seed_fallback(self) -> dict[str, int | bool]:
+    def _fallback_inventory(self) -> dict[str, int | bool | str]:
+        inventory_count = self.repository.count()
+        if inventory_count > 0:
+            return {
+                "available": True,
+                "imported": 0,
+                "inventory_count": inventory_count,
+                "status": "cached",
+                "source": "cache",
+            }
+
         seed_path = getattr(self.settings, "seed_inventory_csv", None)
         imported = 0
         available = False
@@ -102,10 +112,17 @@ class StorePageSyncer:
             "available": available or inventory_count > 0,
             "imported": imported,
             "inventory_count": inventory_count,
+            "status": "fallback" if available or inventory_count > 0 else "failed",
+            "source": "seed",
         }
 
     @staticmethod
-    def _fallback_message(reason: str, fallback: dict[str, int | bool]) -> str:
+    def _fallback_message(reason: str, fallback: dict[str, int | bool | str]) -> str:
+        if fallback["source"] == "cache":
+            return (
+                f"{reason}; preserved the last successful inventory cache "
+                f"with {fallback['inventory_count']} items available."
+            )
         if fallback["available"]:
             return (
                 f"{reason}; refreshed fallback inventory from the seed/cache "
