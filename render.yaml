@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: horizon-ai-agents
+    runtime: python
+    plan: starter
+    buildCommand: python -m pip install -e .
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    disk:
+      name: horizon-ai-agents-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.13
+      - key: DATABASE_PATH
+        value: /var/data/horizon_agents.db
+      - key: EBAY_STORE_URL
+        value: https://www.ebay.com/str/exactspec
+      - key: SYNC_STORE_PAGE_ON_STARTUP
+        value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: METRICOOL_API_TOKEN
+        sync: false
+      - key: MANYCHAT_API_TOKEN
+        sync: false
+      - key: WEBHOOK_SHARED_SECRET
+        generateValue: true
