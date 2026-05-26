@@ -37,12 +37,25 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
                 "facebook": False,
                 "instagram": False,
                 "tiktok": True,
+                "linkedin": False,
                 "publication_date_time": "2026-05-25 05:46:21",
                 "post_content": "Shop this ExactSpec listing.",
                 "as_draft": True,
                 "auto_publish": False,
                 "post_type": "POST",
-            }
+            },
+            {
+                "brand_name": "ExactSpec",
+                "facebook": False,
+                "instagram": False,
+                "tiktok": False,
+                "linkedin": True,
+                "publication_date_time": "2026-05-25 05:46:21",
+                "post_content": "Shop this ExactSpec listing.",
+                "as_draft": True,
+                "auto_publish": False,
+                "post_type": "POST",
+            },
         ],
     )
 
@@ -54,6 +67,7 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
     assert response["metricool_facebook"] is True
     assert response["metricool_instagram"] is False
     assert response["metricool_tiktok"] is False
+    assert response["metricool_linkedin"] is True
     assert response["metricool_as_draft"] is True
 
 
@@ -79,6 +93,7 @@ def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
                 "facebook": False,
                 "instagram": False,
                 "tiktok": True,
+                "linkedin": False,
                 "publication_date_time": "2026-05-25 05:46:21",
                 "post_content": "Shop this ExactSpec listing.",
                 "media_01": "https://example.com/product.mp4",
@@ -98,7 +113,7 @@ def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
 def test_metricool_payload_adds_generated_product_media_url():
     payload = metricool_payload(
         SocialPost(
-            platform="instagram",
+            platform="linkedin",
             text="Shop this listing.",
             product_sku="EBAY-123",
             product_title="Demo Phone",

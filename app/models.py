@@ -4,8 +4,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-Channel = Literal["facebook", "instagram", "tiktok", "whatsapp", "telegram", "web", "unknown"]
-SocialPlatform = Literal["facebook", "instagram", "tiktok"]
+Channel = Literal["facebook", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web", "unknown"]
+SocialPlatform = Literal["facebook", "instagram", "tiktok", "linkedin"]
 
 
 class InventoryItem(BaseModel):
@@ -55,7 +55,7 @@ class SocialDraftRequest(BaseModel):
     sku: str | None = None
     campaign_goal: str = "Drive shoppers to the eBay store."
     tone: str = "friendly, clear, and sales-focused without hype"
-    platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok"])
+    platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok", "linkedin"])
     posts_per_platform: int = Field(default=1, ge=1, le=5)
     brand_name: str | None = None
     publish_after: str | None = None

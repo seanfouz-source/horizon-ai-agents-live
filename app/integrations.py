@@ -24,8 +24,12 @@ def normalize_channel(value: object) -> str:
         "ig": "instagram",
         "insta": "instagram",
         "tik tok": "tiktok",
+        "linked in": "linkedin",
     }
-    return aliases.get(channel, channel if channel in {"facebook", "instagram", "tiktok", "whatsapp", "telegram", "web"} else "unknown")
+    return aliases.get(
+        channel,
+        channel if channel in {"facebook", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web"} else "unknown",
+    )
 
 
 def extract_customer_message(payload: dict[str, object]) -> str:
@@ -68,6 +72,7 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         "facebook": post.platform == "facebook",
         "instagram": post.platform == "instagram",
         "tiktok": post.platform == "tiktok",
+        "linkedin": post.platform == "linkedin",
         "publication_date_time": publication_date_time,
         "post_content": post.text,
         "media_01": media_url,
@@ -95,12 +100,14 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
             payload.get("tiktok") and _is_tiktok_supported_media(payload.get("media_01"))
             for payload in batch.metricool_payloads
         ),
+        "linkedin": any(payload.get("linkedin") for payload in batch.metricool_payloads),
     }
     flat_fields = {
         "metricool_brand_name": first_payload.get("brand_name"),
         "metricool_facebook": platform_flags["facebook"],
         "metricool_instagram": platform_flags["instagram"],
         "metricool_tiktok": platform_flags["tiktok"],
+        "metricool_linkedin": platform_flags["linkedin"],
         "metricool_publication_date_time": first_payload.get("publication_date_time"),
         "metricool_post_content": first_payload.get("post_content"),
         "metricool_media_01": first_payload.get("media_01"),
