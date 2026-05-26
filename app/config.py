@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     webhook_shared_secret: str | None = None
     ebay_access_token: str | None = None
     ebay_marketplace_id: str = "EBAY_US"
-    ebay_store_url: str = "https://www.ebay.com/str/exactspec"
+    ebay_store_url: str = "https://ebay.us/m/GDmaKw"
     ebay_store_max_pages: int = 3
     sync_store_page_on_startup: bool = True
     seed_inventory_csv: Path | None = BASE_DIR / "data" / "exactspec_public_store.csv"
