@@ -16,6 +16,8 @@ services:
       - key: DATABASE_PATH
         value: /var/data/horizon_agents.db
       - key: EBAY_STORE_URL
+        value: https://www.ebay.com/str/exactspec
+      - key: EBAY_STORE_BACKUP_URL
         value: https://ebay.us/m/GDmaKw
       - key: SYNC_STORE_PAGE_ON_STARTUP
         value: "true"
