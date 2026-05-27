@@ -10,7 +10,7 @@ from app.ebay import EbayClient
 from app.integrations import extract_customer_message, manychat_dynamic_response, normalize_channel, zapier_social_drafts_response
 from app.inventory import InventoryRepository
 from app.inventory_seed import seed_inventory_if_empty
-from app.media import product_card_for_item
+from app.media import product_card_for_item, product_card_jpeg_for_item
 from app.models import CustomerQuestion, EbayStoreImportRequest, InventoryItem, InventorySearchResult, SocialDraftRequest
 from app.store_sync import StorePageSyncer
 
@@ -55,6 +55,19 @@ def product_media(sku: str) -> Response:
     return Response(
         content=product_card_for_item(item),
         media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/media/products/{sku}.jpeg")
+@app.get("/media/products/{sku}.jpg")
+def product_media_jpeg(sku: str) -> Response:
+    item = repository.get(sku)
+    if item is None:
+        raise HTTPException(status_code=404, detail="No inventory item found for that SKU.")
+    return Response(
+        content=product_card_jpeg_for_item(item),
+        media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=3600"},
     )
 
