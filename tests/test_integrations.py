@@ -121,7 +121,60 @@ def test_metricool_payload_adds_generated_product_media_url():
         SocialDraftRequest(brand_name="ExactSpec"),
     )
 
-    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.png"
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+
+
+def test_metricool_payload_replaces_tiktok_png_with_generated_jpeg():
+    payload = metricool_payload(
+        SocialPost(
+            platform="tiktok",
+            text="Shop this listing.",
+            product_sku="EBAY-123",
+            product_title="Demo Phone",
+            media_url="https://example.com/product-card.png",
+        ),
+        SocialDraftRequest(brand_name="ExactSpec"),
+    )
+
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+
+
+def test_zapier_social_drafts_response_uses_tiktok_safe_flat_media():
+    batch = SocialDraftBatch(
+        campaign_name="ExactSpec test",
+        posts=[],
+        metricool_payloads=[
+            {
+                "brand_name": "ExactSpec",
+                "facebook": True,
+                "instagram": False,
+                "tiktok": False,
+                "publication_date_time": "2026-05-25 05:46:21",
+                "post_content": "Shop this ExactSpec listing.",
+                "media_01": "https://example.com/product-card.png",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            },
+            {
+                "brand_name": "ExactSpec",
+                "facebook": False,
+                "instagram": False,
+                "tiktok": True,
+                "publication_date_time": "2026-05-25 05:46:21",
+                "post_content": "Shop this ExactSpec listing.",
+                "media_01": "https://example.com/product-card.jpg",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            },
+        ],
+    )
+
+    response = zapier_social_drafts_response(batch)
+
+    assert response["metricool_tiktok"] is True
+    assert response["metricool_media_01"] == "https://example.com/product-card.jpg"
 
 
 def test_default_metricool_publication_time_uses_next_busy_slot():

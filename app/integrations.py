@@ -66,7 +66,7 @@ def manychat_dynamic_response(answer: CustomerAnswer) -> dict[str, object]:
 
 def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str, object]:
     publication_date_time = post.suggested_schedule or request.publish_after or default_metricool_publication_time()
-    media_url = post.media_url or generated_product_media_url(post.product_sku)
+    media_url = _metricool_media_url(post)
     payload: dict[str, object] = {
         "brand_name": request.brand_name,
         "facebook": post.platform == "facebook",
@@ -102,6 +102,16 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         ),
         "linkedin": any(payload.get("linkedin") for payload in batch.metricool_payloads),
     }
+    flat_media_url = first_payload.get("media_01")
+    if platform_flags["tiktok"] and not _is_tiktok_supported_media(flat_media_url):
+        flat_media_url = next(
+            (
+                payload.get("media_01")
+                for payload in batch.metricool_payloads
+                if payload.get("tiktok") and _is_tiktok_supported_media(payload.get("media_01"))
+            ),
+            flat_media_url,
+        )
     flat_fields = {
         "metricool_brand_name": first_payload.get("brand_name"),
         "metricool_facebook": platform_flags["facebook"],
@@ -110,7 +120,7 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "metricool_linkedin": platform_flags["linkedin"],
         "metricool_publication_date_time": first_payload.get("publication_date_time"),
         "metricool_post_content": first_payload.get("post_content"),
-        "metricool_media_01": first_payload.get("media_01"),
+        "metricool_media_01": flat_media_url,
         "metricool_as_draft": first_payload.get("as_draft"),
         "metricool_auto_publish": first_payload.get("auto_publish"),
         "metricool_post_type": first_payload.get("post_type"),
@@ -134,14 +144,25 @@ def _is_tiktok_supported_media(value: object) -> bool:
     if not isinstance(value, str):
         return False
     path = value.lower().split("?")[0]
-    return path.endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm"))
+    return path.endswith((".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"))
 
 
-def generated_product_media_url(sku: str | None) -> str | None:
+def _metricool_media_url(post: SocialPost) -> str | None:
+    if post.media_url:
+        if post.platform != "tiktok" or _is_tiktok_supported_media(post.media_url):
+            return post.media_url
+        return generated_product_media_url(post.product_sku)
+    return generated_product_media_url(post.product_sku)
+
+
+def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str | None:
     if not sku:
         return None
+    clean_extension = extension.lower().lstrip(".")
+    if clean_extension not in {"jpg", "jpeg", "png", "webp"}:
+        clean_extension = "jpg"
     base_url = get_settings().public_base_url.rstrip("/")
-    return f"{base_url}/media/products/{quote(sku, safe='')}.png"
+    return f"{base_url}/media/products/{quote(sku, safe='')}.{clean_extension}"
 
 
 def default_metricool_publication_time(now: datetime | None = None) -> str:

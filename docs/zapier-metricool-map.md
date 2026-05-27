@@ -154,5 +154,6 @@ Review-first mode sends generated posts to Metricool for approval. Auto-publish
 mode lets Metricool publish at the scheduled time.
 
 For auto-publish, the flat Instagram field is only true when a media URL exists,
-and the flat TikTok field is only true when a video URL exists. This prevents
-Metricool test failures and avoids scheduling invalid text-only TikTok posts.
+and the flat TikTok field is only true when a TikTok-safe media URL exists. The
+app uses generated `.jpg` product cards by default because TikTok Business photo
+posts reject `.png` media.

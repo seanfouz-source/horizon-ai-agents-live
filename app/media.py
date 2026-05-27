@@ -80,6 +80,20 @@ def product_card_png(
         return _pixel_product_card_png(sku, title, price, condition, ebay_item_id)
 
 
+@lru_cache(maxsize=512)
+def product_card_jpeg(
+    sku: str,
+    title: str,
+    price: float | None,
+    condition: str | None,
+    ebay_item_id: str | None,
+) -> bytes:
+    image = _pillow_product_card_image(sku, title, price, condition, ebay_item_id)
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=90, optimize=True, progressive=True)
+    return output.getvalue()
+
+
 def _pillow_product_card_png(
     sku: str,
     title: str,
@@ -87,6 +101,19 @@ def _pillow_product_card_png(
     condition: str | None,
     ebay_item_id: str | None,
 ) -> bytes:
+    image = _pillow_product_card_image(sku, title, price, condition, ebay_item_id)
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _pillow_product_card_image(
+    sku: str,
+    title: str,
+    price: float | None,
+    condition: str | None,
+    ebay_item_id: str | None,
+):
     from PIL import Image, ImageDraw, ImageFont
 
     image = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), BACKGROUND)
@@ -122,9 +149,7 @@ def _pillow_product_card_png(
     draw.rounded_rectangle((72, 936, CARD_WIDTH - 72, 1012), radius=12, fill=INK)
     draw.text((120, 957), "Shop this listing on eBay", font=cta_font, fill=(255, 255, 255))
 
-    output = BytesIO()
-    image.save(output, format="PNG", optimize=True)
-    return output.getvalue()
+    return image
 
 
 def _pixel_product_card_png(
@@ -165,6 +190,10 @@ def _pixel_product_card_png(
 
 def product_card_for_item(item: InventoryItem) -> bytes:
     return product_card_png(item.sku, item.title, item.price, item.condition, item.ebay_item_id)
+
+
+def product_card_jpeg_for_item(item: InventoryItem) -> bytes:
+    return product_card_jpeg(item.sku, item.title, item.price, item.condition, item.ebay_item_id)
 
 
 def _load_font(image_font, size: int, bold: bool = False):
