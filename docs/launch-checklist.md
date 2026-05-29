@@ -128,3 +128,12 @@ Before turning on automation:
 - Confirm links open the right eBay listings.
 - Keep replies short and product-specific.
 - Keep all scheduled social posts as drafts until you approve the style.
+
+## 8. Facebook Group Outreach
+
+Use [facebook-group-outreach.md](./facebook-group-outreach.md) for group
+research, join-request drafts, group post drafts, and group reply drafts.
+
+Keep Facebook Group comments manual-review unless the user has messaged Horizon
+through a supported inbox/DM flow. The app returns `can_auto_send` so Zapier or
+Manychat can route safe inbound DMs differently from group comments.

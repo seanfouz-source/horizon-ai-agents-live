@@ -7,7 +7,17 @@ from app.campaigns import request_campaign_media_url
 from app.config import get_settings
 from app.integrations import metricool_payload
 from app.inventory import InventoryRepository
-from app.models import CustomerAnswer, CustomerQuestion, SocialDraftBatch, SocialDraftPlan, SocialDraftRequest
+from app.models import (
+    CustomerAnswer,
+    CustomerQuestion,
+    GroupOutreachPlan,
+    GroupOutreachRequest,
+    GroupReplyDraft,
+    GroupReplyRequest,
+    SocialDraftBatch,
+    SocialDraftPlan,
+    SocialDraftRequest,
+)
 
 
 def get_repository() -> InventoryRepository:
@@ -129,6 +139,20 @@ Rules:
 """
 
 
+GROUP_OUTREACH_AGENT_INSTRUCTIONS = """
+You create compliant Facebook Group outreach plans for Horizon Wireless.
+
+Rules:
+- Do not tell anyone to auto-join groups, scrape members, cold-DM members, or bypass group rules.
+- Treat Facebook Group posts and comments as manual-review work unless the user has an approved, supported inbox/DM trigger.
+- Prioritize groups only when the audience and rules are compatible with eBay listings, wholesale phones, resellers, repair shops, or electronics buyers.
+- If rules are missing or unclear, recommend review instead of posting.
+- Draft short, non-spammy posts that disclose Horizon Wireless and avoid hype, fake scarcity, discounts, or unsupported claims.
+- Use the eBay store and campaign video when provided.
+- Return structured output only.
+"""
+
+
 def _customer_agent() -> Agent:
     settings = get_settings()
     return Agent(
@@ -147,6 +171,17 @@ def _social_agent() -> Agent:
         instructions=SOCIAL_AGENT_INSTRUCTIONS,
         tools=[search_stock, get_stock_item, list_promotable_stock],
         output_type=SocialDraftPlan,
+    )
+
+
+def _group_outreach_agent() -> Agent:
+    settings = get_settings()
+    return Agent(
+        name="Facebook Group Outreach Planner",
+        model=settings.openai_model,
+        instructions=GROUP_OUTREACH_AGENT_INSTRUCTIONS,
+        tools=[search_stock, list_promotable_stock],
+        output_type=GroupOutreachPlan,
     )
 
 
@@ -204,3 +239,72 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
             post.media_url = campaign_media_url
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     return batch
+
+
+async def create_group_outreach_plan(request: GroupOutreachRequest) -> GroupOutreachPlan:
+    prompt = (
+        "Create a compliant Facebook Group outreach plan.\n"
+        f"{request.model_dump_json(indent=2)}"
+    )
+    result = await Runner.run(_group_outreach_agent(), prompt, max_turns=5)
+    plan = result.final_output
+    if isinstance(plan, GroupOutreachPlan):
+        return plan
+    return GroupOutreachPlan(
+        summary="Manual review required before Facebook Group outreach.",
+        join_request_draft="Hi, I work with Horizon Wireless. I am interested in joining to learn and share relevant phone inventory only when it follows the group rules.",
+        compliance_checklist=[
+            "Do not auto-join groups.",
+            "Do not post unless the group rules allow relevant business posts.",
+            "Do not cold-message group members.",
+        ],
+        notes=str(plan),
+    )
+
+
+async def draft_group_reply(request: GroupReplyRequest) -> GroupReplyDraft:
+    answer = await answer_customer_question(
+        CustomerQuestion(
+            message=_group_reply_message(request),
+            channel=request.channel,
+            user_id=request.author_name,
+            first_name=request.author_name,
+            metadata={
+                "group_name": request.group_name or "",
+                "group_url": request.group_url or "",
+                "interaction_type": request.interaction_type,
+            },
+        )
+    )
+    can_auto_send = _can_auto_send_group_reply(request)
+    return GroupReplyDraft(
+        reply=answer.reply,
+        channel=answer.channel,
+        matched_items=answer.matched_items,
+        needs_human=answer.needs_human,
+        manual_review_required=not can_auto_send,
+        can_auto_send=can_auto_send,
+        compliance_notes=_group_reply_compliance_note(request, can_auto_send),
+    )
+
+
+def _group_reply_message(request: GroupReplyRequest) -> str:
+    context = []
+    if request.group_name:
+        context.append(f"Facebook Group: {request.group_name}")
+    if request.post_context:
+        context.append(f"Post context: {request.post_context}")
+    if request.rules_text:
+        context.append(f"Group rules: {request.rules_text}")
+    context.append(f"Member message: {request.message}")
+    return "\n".join(context)
+
+
+def _can_auto_send_group_reply(request: GroupReplyRequest) -> bool:
+    return request.interaction_type in {"group_dm_to_page", "page_dm", "instagram_dm"} and request.user_opted_in
+
+
+def _group_reply_compliance_note(request: GroupReplyRequest, can_auto_send: bool) -> str:
+    if can_auto_send:
+        return "Can be sent through a supported inbound DM automation because the user messaged Horizon and opted in."
+    return "Draft only. Facebook Group comments and member interactions require manual review; do not auto-send, cold-DM, or bypass group rules."
