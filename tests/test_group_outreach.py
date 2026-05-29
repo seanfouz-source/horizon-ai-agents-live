@@ -22,7 +22,14 @@ async def fake_answer_customer_question(question):
 
 
 def test_group_comment_reply_requires_manual_review(monkeypatch):
-    monkeypatch.setattr(agents_module, "answer_customer_question", fake_answer_customer_question)
+    seen = {}
+
+    async def fake_answer(question):
+        seen["message"] = question.message
+        seen["metadata"] = question.metadata
+        return await fake_answer_customer_question(question)
+
+    monkeypatch.setattr(agents_module, "answer_customer_question", fake_answer)
 
     draft = asyncio.run(
         agents_module.draft_group_reply(
@@ -38,6 +45,8 @@ def test_group_comment_reply_requires_manual_review(monkeypatch):
     assert draft.manual_review_required is True
     assert "Draft only" in draft.compliance_notes
     assert draft.matched_items[0].sku == "EBAY-366436069804"
+    assert seen["message"] == "Do you have any Galaxy Z Flip phones?"
+    assert seen["metadata"]["group_name"] == "Phone Resellers"
 
 
 def test_opted_in_page_dm_can_auto_send(monkeypatch):
