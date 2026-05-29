@@ -390,7 +390,11 @@ def _inventory_social_post(
         product_title=item.title,
         ebay_url=_buy_url_for_item(item),
         media_url=media_url or request.media_url,
-        hashtags=_hashtags_for_item(item)def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
+        hashtags=_hashtags_for_item(item),
+    )
+
+
+def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
     brand = request.brand_name or "Horizon Wireless"
     price = _price_text(item)
     condition = f" Condition: {item.condition}." if item.condition else ""
@@ -425,8 +429,6 @@ def _canonical_ebay_item_url(url: str) -> str | None:
     if not match:
         return None
     return f"https://www.ebay.com/itm/{match.group(1)}"
-
- {url}"
 
 
 def _price_text(item: InventoryItem) -> str:
