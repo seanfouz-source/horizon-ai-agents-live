@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
     metricool_api_token: str | None = None
+    metricool_blog_id: int | None = None
+    metricool_user_id: int | None = None
+    metricool_brand_label: str = "Horizon Wireless"
     manychat_api_token: str | None = None
     webhook_shared_secret: str | None = None
     ebay_access_token: str | None = None
