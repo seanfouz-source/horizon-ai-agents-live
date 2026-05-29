@@ -135,6 +135,7 @@ Rules:
 - Avoid spammy wording, excessive hashtags, all caps, or engagement bait.
 - For TikTok, write caption-style copy that can accompany a short product video.
 - For LinkedIn, write more professional product copy for a business/audience feed.
+- Leave suggested_schedule blank; the backend assigns exact Metricool publish times.
 - Return structured output only.
 """
 
@@ -260,8 +261,7 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
     if batch.posts and not request.publish_after:
         default_schedule = default_metricool_publication_times(len(batch.posts))
         for post, publication_time in zip(batch.posts, default_schedule, strict=False):
-            if not post.suggested_schedule:
-                post.suggested_schedule = publication_time
+            post.suggested_schedule = publication_time
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     return batch
 
