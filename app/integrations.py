@@ -7,14 +7,21 @@ from app.config import get_settings
 from app.models import CustomerAnswer, SocialDraftBatch, SocialDraftRequest, SocialPost
 
 
-BUSY_POSTING_TIMEZONE = ZoneInfo("America/Chicago")
-BUSY_POSTING_SLOTS = {
-    0: (time(12, 30), time(15, 30)),
-    1: (time(12, 30), time(14, 30), time(16, 30)),
-    2: (time(12, 30), time(14, 30), time(16, 30)),
-    3: (time(12, 30), time(14, 30), time(16, 30)),
-    4: (time(14, 30), time(16, 30)),
-}
+POSTING_TIMEZONE = ZoneInfo("America/Chicago")
+POSTING_MINIMUM_LEAD_TIME = timedelta(minutes=30)
+DAILY_POSTING_SLOTS = (
+    time(7, 30),
+    time(9, 0),
+    time(10, 30),
+    time(12, 0),
+    time(13, 30),
+    time(15, 0),
+    time(16, 30),
+    time(18, 0),
+    time(19, 30),
+    time(21, 0),
+    time(22, 30),
+)
 
 
 def normalize_channel(value: object) -> str:
@@ -187,19 +194,30 @@ def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str 
 
 
 def default_metricool_publication_time(now: datetime | None = None) -> str:
+    return default_metricool_publication_times(1, now=now)[0]
+
+
+def default_metricool_publication_times(count: int, now: datetime | None = None) -> list[str]:
+    if count <= 0:
+        return []
+
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
 
-    local_now = current_time.astimezone(BUSY_POSTING_TIMEZONE)
-    minimum_time = local_now + timedelta(minutes=30)
-    for day_offset in range(8):
-        candidate_date = local_now.date() + timedelta(days=day_offset)
-        slots = BUSY_POSTING_SLOTS.get(candidate_date.weekday(), ())
-        for slot in slots:
-            candidate = datetime.combine(candidate_date, slot, tzinfo=BUSY_POSTING_TIMEZONE)
-            if candidate > minimum_time:
-                return candidate.strftime("%Y-%m-%d %H:%M:%S")
+    local_now = current_time.astimezone(POSTING_TIMEZONE)
+    minimum_time = local_now + POSTING_MINIMUM_LEAD_TIME
+    publication_times: list[str] = []
+    day_offset = 0
 
-    fallback = minimum_time + timedelta(hours=1)
-    return fallback.strftime("%Y-%m-%d %H:%M:%S")
+    while len(publication_times) < count:
+        candidate_date = local_now.date() + timedelta(days=day_offset)
+        for slot in DAILY_POSTING_SLOTS:
+            candidate = datetime.combine(candidate_date, slot, tzinfo=POSTING_TIMEZONE)
+            if candidate >= minimum_time:
+                publication_times.append(candidate.strftime("%Y-%m-%d %H:%M:%S"))
+                if len(publication_times) == count:
+                    return publication_times
+        day_offset += 1
+
+    return publication_times
