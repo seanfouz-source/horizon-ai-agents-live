@@ -79,10 +79,11 @@ Body:
 
 ```json
 {
-  "query": "keyboard",
-  "platforms": ["facebook", "instagram", "tiktok"],
-  "posts_per_platform": 1,
-  "brand_name": "Horizon",
+  "promote_all_inventory": true,
+  "query": "all phones",
+  "max_products_per_run": 50,
+  "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
+  "brand_name": "Horizon Wireless",
   "as_draft": false,
   "auto_publish": true
 }
@@ -119,6 +120,18 @@ Response fields:
 
 ```text
 metricool_payloads
+metricool_payload_count
+metricool_brand_name_items
+metricool_facebook_items
+metricool_instagram_items
+metricool_tiktok_items
+metricool_linkedin_items
+metricool_publication_date_time_items
+metricool_post_content_items
+metricool_media_01_items
+metricool_as_draft_items
+metricool_auto_publish_items
+metricool_product_sku_items
 metricool_publication_date_time
 metricool_post_content
 metricool_facebook
@@ -133,10 +146,11 @@ metricool_auto_publish
 metricool_post_type
 ```
 
-Each item in `metricool_payloads` maps to one Metricool `Schedule Post` action.
-For the simplest Zapier setup, map the first post from the flat `metricool_*`
-fields. Use `metricool_payloads` only when you are building a loop for multiple
-Metricool posts.
+Each item in `metricool_payloads` maps to one Metricool `Schedule Post` action,
+but the most reliable Zapier setup is to add `Looping by Zapier` after this
+webhook and loop over the `metricool_*_items` arrays. The flat `metricool_*`
+fields intentionally contain only the first post for quick single-product tests;
+using only those flat fields will schedule only one item.
 
 ## Metricool Schedule Post Mapping
 

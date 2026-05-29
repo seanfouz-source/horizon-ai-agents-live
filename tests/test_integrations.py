@@ -74,6 +74,19 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
     assert response["metricool_tiktok"] is False
     assert response["metricool_linkedin"] is True
     assert response["metricool_as_draft"] is True
+    assert response["metricool_payload_count"] == 4
+    assert response["metricool_post_content_items"] == [
+        "Shop this ExactSpec listing.",
+        "Shop this ExactSpec listing.",
+        "Shop this ExactSpec listing.",
+        "Shop this ExactSpec listing.",
+    ]
+    assert response["metricool_publication_date_time_items"] == [
+        "2026-05-25 05:46:21",
+        "2026-05-25 05:46:21",
+        "2026-05-25 05:46:21",
+        "2026-05-25 05:46:21",
+    ]
 
 
 def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
@@ -188,6 +201,31 @@ def test_metricool_payload_adds_facebook_group_targets():
 
     assert payload["publish_to_facebook_groups"] is True
     assert payload["facebook_groups"] == ["Wireless Wholesale Buyers", "Phone Resellers"]
+
+
+def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
+    payload = metricool_payload(
+        SocialPost(
+            platform="facebook",
+            text="Shop this listing.",
+            product_sku="EBAY-123",
+            product_title="Demo Phone",
+            media_url="https://example.com/product-card.png",
+        ),
+        SocialDraftRequest(
+            brand_name="Horizon Wireless",
+            promote_all_inventory=True,
+            platforms=["facebook", "instagram", "tiktok", "linkedin"],
+            auto_publish=True,
+            as_draft=False,
+        ),
+    )
+
+    assert payload["facebook"] is True
+    assert payload["instagram"] is True
+    assert payload["tiktok"] is True
+    assert payload["linkedin"] is True
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
 
 
 def test_zapier_social_drafts_response_uses_tiktok_safe_flat_media():

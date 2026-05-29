@@ -76,14 +76,18 @@ def manychat_dynamic_response(answer: CustomerAnswer) -> dict[str, object]:
 def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str, object]:
     publication_date_time = _metricool_publication_time(post, request)
     media_url = _metricool_media_url(post, request)
-    facebook_groups = request.facebook_groups if post.platform == "facebook" and request.facebook_groups else None
+    facebook_enabled = _platform_enabled(post, request, "facebook")
+    instagram_enabled = _platform_enabled(post, request, "instagram")
+    tiktok_enabled = _platform_enabled(post, request, "tiktok")
+    linkedin_enabled = _platform_enabled(post, request, "linkedin")
+    facebook_groups = request.facebook_groups if facebook_enabled and request.facebook_groups else None
     payload: dict[str, object] = {
         "brand_name": request.brand_name,
-        "facebook": post.platform == "facebook",
-        "instagram": post.platform == "instagram",
-        "tiktok": post.platform == "tiktok",
-        "linkedin": post.platform == "linkedin",
-        "publish_to_facebook_groups": request.publish_to_facebook_groups if post.platform == "facebook" else None,
+        "facebook": facebook_enabled,
+        "instagram": instagram_enabled,
+        "tiktok": tiktok_enabled,
+        "linkedin": linkedin_enabled,
+        "publish_to_facebook_groups": request.publish_to_facebook_groups if facebook_enabled else None,
         "facebook_groups": facebook_groups,
         "publication_date_time": publication_date_time,
         "post_content": post.text,
@@ -151,7 +155,40 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "publicationDate": first_payload.get("publication_date_time"),
     }
     response.update({key: value for key, value in flat_fields.items() if value is not None})
+    response.update(_metricool_line_items(batch.metricool_payloads))
     return response
+
+
+def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object]:
+    if not payloads:
+        return {"metricool_payload_count": 0}
+    fields = (
+        "brand_name",
+        "facebook",
+        "instagram",
+        "tiktok",
+        "linkedin",
+        "publish_to_facebook_groups",
+        "facebook_groups",
+        "publication_date_time",
+        "post_content",
+        "media_01",
+        "as_draft",
+        "auto_publish",
+        "post_type",
+        "social_post_type",
+        "product_sku",
+        "product_title",
+        "ebay_url",
+    )
+    line_items: dict[str, object] = {"metricool_payload_count": len(payloads)}
+    for field in fields:
+        line_items[f"metricool_{field}_items"] = [
+            _csv_value(payload.get(field)) if field == "facebook_groups" else payload.get(field)
+            for payload in payloads
+        ]
+    line_items["publicationDate_items"] = [payload.get("publication_date_time") for payload in payloads]
+    return line_items
 
 
 def _is_video_media(value: object) -> bool:
@@ -177,11 +214,21 @@ def _csv_value(value: object) -> str | None:
 
 def _metricool_media_url(post: SocialPost, request: SocialDraftRequest | None = None) -> str | None:
     media_url = post.media_url or request_campaign_media_url(request)
+    needs_tiktok_safe_media = post.platform == "tiktok" or (
+        bool(request and request.promote_all_inventory and request.cross_post_to_all_platforms)
+        and "tiktok" in (request.platforms if request else [])
+    )
     if media_url:
-        if post.platform != "tiktok" or _is_tiktok_supported_media(media_url):
+        if not needs_tiktok_safe_media or _is_tiktok_supported_media(media_url):
             return media_url
         return generated_product_media_url(post.product_sku)
     return generated_product_media_url(post.product_sku)
+
+
+def _platform_enabled(post: SocialPost, request: SocialDraftRequest, platform: str) -> bool:
+    if request.promote_all_inventory and request.cross_post_to_all_platforms:
+        return platform in request.platforms
+    return post.platform == platform
 
 
 def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str | None:

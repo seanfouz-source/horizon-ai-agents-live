@@ -93,7 +93,7 @@ For advertising posts:
 
 1. Trigger: Schedule, new eBay listing, or manual webhook.
 2. Action: POST a request to `/webhooks/zapier/social-drafts`.
-3. Action: Map each returned `metricool_payloads[]` item into Metricool's `Schedule Post` action.
+3. Action: Use Looping by Zapier over the returned `metricool_*_items` fields, then map each loop item into Metricool's `Schedule Post` action.
 
 For daily reporting:
 
@@ -106,15 +106,20 @@ Example social draft request:
 
 ```json
 {
-  "query": "keyboard",
-  "platforms": ["facebook", "instagram", "tiktok"],
-  "posts_per_platform": 1,
-  "brand_name": "Horizon",
-  "publish_after": "2026-05-25T15:00:00-05:00",
-  "as_draft": true,
-  "auto_publish": false
+  "promote_all_inventory": true,
+  "query": "all phones",
+  "max_products_per_run": 50,
+  "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
+  "brand_name": "Horizon Wireless",
+  "as_draft": false,
+  "auto_publish": true
 }
 ```
+
+When `promote_all_inventory` is true, the app creates one Metricool payload per
+in-stock listing. By default each payload cross-posts to every requested
+platform, so 18 in-stock phones produce 18 scheduled Metricool posts instead of
+only the first phone.
 
 ## eBay Inventory
 

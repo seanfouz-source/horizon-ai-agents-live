@@ -91,6 +91,9 @@ For the Horizon Wireless videos, use the same social-drafts webhook with:
 ```json
 {
   "campaign_video": "wholesale",
+  "promote_all_inventory": true,
+  "query": "all phones",
+  "max_products_per_run": 50,
   "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
   "brand_name": "Horizon Wireless",
   "as_draft": false,
@@ -103,6 +106,9 @@ Then repeat with:
 ```json
 {
   "campaign_video": "ebay-retail-store",
+  "promote_all_inventory": true,
+  "query": "all phones",
+  "max_products_per_run": 50,
   "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
   "brand_name": "Horizon Wireless",
   "as_draft": false,
@@ -113,6 +119,10 @@ Then repeat with:
 The app serves the videos at `/media/campaigns/wholesale.mp4` and
 `/media/campaigns/ebay-retail-store.mp4` so Metricool receives public HTTPS MP4
 links instead of local files.
+
+For daily inventory coverage, the Zap must loop over the returned
+`metricool_*_items` arrays. The flat `metricool_*` fields are only the first
+post and are useful for testing one item.
 
 Facebook Groups are only safe to automate when the group and scheduler support
 the destination directly. If the Metricool Zap action does not show a group

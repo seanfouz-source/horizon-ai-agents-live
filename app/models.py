@@ -58,6 +58,9 @@ class SocialDraftRequest(BaseModel):
     tone: str = "friendly, clear, and sales-focused without hype"
     platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok", "linkedin"])
     posts_per_platform: int = Field(default=1, ge=1, le=5)
+    promote_all_inventory: bool = False
+    max_products_per_run: int = Field(default=50, ge=1, le=50)
+    cross_post_to_all_platforms: bool = True
     brand_name: str | None = None
     media_url: str | None = None
     campaign_video: str | None = None
