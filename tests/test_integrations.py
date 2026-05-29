@@ -121,7 +121,120 @@ def test_metricool_payload_adds_generated_product_media_url():
         SocialDraftRequest(brand_name="ExactSpec"),
     )
 
-    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.png"
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+
+
+def test_metricool_payload_replaces_tiktok_png_with_generated_jpeg():
+    payload = metricool_payload(
+        SocialPost(
+            platform="tiktok",
+            text="Shop this listing.",
+            product_sku="EBAY-123",
+            product_title="Demo Phone",
+            media_url="https://example.com/product-card.png",
+        ),
+        SocialDraftRequest(brand_name="ExactSpec"),
+    )
+
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+
+
+def test_metricool_payload_uses_campaign_video_for_tiktok():
+    payload = metricool_payload(
+        SocialPost(
+            platform="tiktok",
+            text="Watch the Horizon Wireless retail store walkthrough.",
+            product_sku="EBAY-123",
+            product_title="Demo Phone",
+        ),
+        SocialDraftRequest(brand_name="Horizon Wireless", campaign_video="retail"),
+    )
+
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/campaigns/ebay-retail-store.mp4"
+
+
+def test_metricool_payload_adds_facebook_group_targets():
+    payload = metricool_payload(
+        SocialPost(
+            platform="facebook",
+            text="Wholesale devices available from Horizon Wireless.",
+        ),
+        SocialDraftRequest(
+            brand_name="Horizon Wireless",
+            facebook_groups="Wireless Wholesale Buyers, Phone Resellers",
+            publish_to_facebook_groups=True,
+        ),
+    )
+
+    assert payload["publish_to_facebook_groups"] is True
+    assert payload["facebook_groups"] == ["Wireless Wholesale Buyers", "Phone Resellers"]
+
+
+def test_zapier_social_drafts_response_uses_tiktok_safe_flat_media():
+    batch = SocialDraftBatch(
+        campaign_name="ExactSpec test",
+        posts=[],
+        metricool_payloads=[
+            {
+                "brand_name": "ExactSpec",
+                "facebook": True,
+                "instagram": False,
+                "tiktok": False,
+                "publication_date_time": "2026-05-25 05:46:21",
+                "post_content": "Shop this ExactSpec listing.",
+                "media_01": "https://example.com/product-card.png",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            },
+            {
+                "brand_name": "ExactSpec",
+                "facebook": False,
+                "instagram": False,
+                "tiktok": True,
+                "publication_date_time": "2026-05-25 05:46:21",
+                "post_content": "Shop this ExactSpec listing.",
+                "media_01": "https://example.com/product-card.jpg",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            },
+        ],
+    )
+
+    response = zapier_social_drafts_response(batch)
+
+    assert response["metricool_tiktok"] is True
+    assert response["metricool_media_01"] == "https://example.com/product-card.jpg"
+
+
+def test_zapier_social_drafts_response_flattens_facebook_groups():
+    batch = SocialDraftBatch(
+        campaign_name="Horizon wholesale video",
+        posts=[],
+        metricool_payloads=[
+            {
+                "brand_name": "Horizon Wireless",
+                "facebook": True,
+                "instagram": False,
+                "tiktok": False,
+                "linkedin": False,
+                "publish_to_facebook_groups": True,
+                "facebook_groups": ["Wireless Wholesale Buyers", "Phone Resellers"],
+                "publication_date_time": "2026-05-29 14:30:00",
+                "post_content": "Wholesale devices available from Horizon Wireless.",
+                "media_01": "https://example.com/wholesale.mp4",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            }
+        ],
+    )
+
+    response = zapier_social_drafts_response(batch)
+
+    assert response["metricool_publish_to_facebook_groups"] is True
+    assert response["metricool_facebook_groups"] == "Wireless Wholesale Buyers, Phone Resellers"
 
 
 def test_default_metricool_publication_time_uses_next_busy_slot():
