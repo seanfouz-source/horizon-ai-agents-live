@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from datetime import date, datetime, timedelta
+from io import BytesIO
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -125,18 +127,175 @@ def format_daily_report_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def flatten_report_for_zapier(report: dict[str, Any]) -> dict[str, Any]:
+def format_daily_report_pdf(report: dict[str, Any]) -> bytes:
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    except ImportError as exc:
+        raise MetricoolReportError("reportlab is required to render PDF reports.") from exc
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=0.55 * inch,
+        leftMargin=0.55 * inch,
+        topMargin=0.55 * inch,
+        bottomMargin=0.55 * inch,
+        title=f"Horizon Wireless AI Marketing Report - {report['report_date']}",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "HorizonTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=20,
+        leading=24,
+        textColor=colors.HexColor("#17202A"),
+        spaceAfter=10,
+    )
+    section_style = ParagraphStyle(
+        "HorizonSection",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        leading=15,
+        textColor=colors.HexColor("#17202A"),
+        spaceBefore=12,
+        spaceAfter=6,
+    )
+    body_style = ParagraphStyle(
+        "HorizonBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#273746"),
+    )
+    small_style = ParagraphStyle(
+        "HorizonSmall",
+        parent=body_style,
+        fontSize=8,
+        leading=10,
+    )
+
+    story: list[Any] = [
+        Paragraph("Horizon Wireless AI Marketing Report", title_style),
+        Paragraph(f"Report date: {report['report_date']} &nbsp;&nbsp; Timezone: {report['timezone']}", body_style),
+        Paragraph(f"Brand: {report['brand']['label']} ({report['brand']['blog_id']})", body_style),
+        Spacer(1, 12),
+    ]
+
+    totals = report["totals"]
+    summary_rows = [
+        ["Posts Tracked", totals["scheduled_posts"], "Published", totals["published_posts"]],
+        ["Pending", totals["pending_posts"], "Failed", totals["failed_posts"]],
+        ["Impressions/Views", totals["impressions"], "Reach", totals["reach"]],
+        ["eBay Click Proxy", totals["clicks"], "Engagement Rate", f"{totals['engagement_rate']}%"],
+    ]
+    story.append(_pdf_table(summary_rows, [1.55 * inch, 1.1 * inch, 1.45 * inch, 1.1 * inch]))
+
+    story.append(Paragraph("Platform Performance", section_style))
+    platform_rows = [["Platform", "Posts", "Views", "Reach", "Clicks", "Engage", "Pending", "Failed"]]
+    for row in report["platforms"]:
+        platform_rows.append(
+            [
+                row["platform"].title(),
+                row["posts"],
+                row["impressions"],
+                row["reach"],
+                row["clicks"],
+                row["engagement_actions"],
+                row["pending_posts"],
+                row["failed_posts"],
+            ]
+        )
+    story.append(_pdf_table(platform_rows, [1.05 * inch, 0.55 * inch, 0.7 * inch, 0.7 * inch, 0.6 * inch, 0.7 * inch, 0.7 * inch, 0.6 * inch], header=True))
+
+    story.append(Paragraph("Top Posts", section_style))
+    if report["top_posts"]:
+        top_rows = [["Platform", "Views", "Clicks", "Engagement", "Post"]]
+        for post in report["top_posts"][:5]:
+            top_rows.append(
+                [
+                    post["platform"].title(),
+                    post["impressions"],
+                    post["clicks"],
+                    post["engagement_actions"],
+                    Paragraph(_pdf_escape(post["text"][:220]), small_style),
+                ]
+            )
+        story.append(_pdf_table(top_rows, [0.85 * inch, 0.55 * inch, 0.55 * inch, 0.75 * inch, 3.3 * inch], header=True))
+    else:
+        story.append(Paragraph("No published post analytics returned for this date yet.", body_style))
+
+    story.append(Paragraph("Watch List", section_style))
+    if report["failures"]:
+        failure_rows = [["Platform", "Post ID", "Status", "Detail"]]
+        for failure in report["failures"]:
+            failure_rows.append(
+                [
+                    str(failure["platform"]).title(),
+                    failure["post_id"],
+                    failure["status"],
+                    Paragraph(_pdf_escape(failure["detail"]), small_style),
+                ]
+            )
+        story.append(_pdf_table(failure_rows, [0.9 * inch, 0.75 * inch, 0.7 * inch, 3.6 * inch], header=True))
+    else:
+        story.append(Paragraph("No failed Metricool posts found for this report date.", body_style))
+
+    story.append(Paragraph("Recommendations", section_style))
+    for recommendation in report["recommendations"]:
+        story.append(Paragraph(f"- {_pdf_escape(recommendation)}", body_style))
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Generated by Horizon AI Agents from Metricool and Horizon inventory data.", small_style))
+    document.build(story)
+    return buffer.getvalue()
+
+
+def report_attachment_filename(report: dict[str, Any]) -> str:
+    return f"horizon-ai-marketing-report-{report['report_date']}.pdf"
+
+
+def report_attachment_url(report: dict[str, Any], base_url: str | None = None) -> str:
+    base = (base_url or get_settings().public_base_url).rstrip("/")
+    return f"{base}/reports/daily.pdf?date={quote(report['report_date'])}"
+
+
+def report_email_body(report: dict[str, Any]) -> str:
+    totals = report["totals"]
+    best_platform = _best_platform(report)
+    best_line = f"\nBest current platform: {best_platform['platform']}" if best_platform else ""
+    return (
+        f"Attached is the Horizon Wireless AI Marketing Report for {report['report_date']}.\n\n"
+        "Quick snapshot:\n"
+        f"- Posts tracked: {totals['scheduled_posts']}\n"
+        f"- Published analytics posts: {totals['analytics_posts']}\n"
+        f"- Pending posts: {totals['pending_posts']}\n"
+        f"- Failed posts: {totals['failed_posts']}\n"
+        f"- Impressions/views: {totals['impressions']}\n"
+        f"- eBay click proxy: {totals['clicks']}"
+        f"{best_line}\n\n"
+        "The attached PDF includes platform performance, top posts, failures to watch, and next recommendations."
+    )
+
+
+def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = None) -> dict[str, Any]:
     markdown = format_daily_report_markdown(report)
     totals = report["totals"]
-    best_platform = max(report["platforms"], key=lambda row: (row["clicks"], row["engagement_actions"]), default=None)
-    if best_platform and not (
-        best_platform["clicks"] or best_platform["engagement_actions"] or best_platform["impressions"]
-    ):
-        best_platform = None
+    best_platform = _best_platform(report)
     return {
         "report_date": report["report_date"],
         "subject": f"Horizon Wireless AI Marketing Report - {report['report_date']}",
         "summary_text": markdown,
+        "email_body": report_email_body(report),
+        "attachment_url": report_attachment_url(report, base_url),
+        "attachment_filename": report_attachment_filename(report),
         "brand_name": report["brand"]["label"],
         "scheduled_posts": totals["scheduled_posts"],
         "analytics_posts": totals["analytics_posts"],
@@ -159,6 +318,61 @@ def flatten_report_for_zapier(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "recommendations": "\n".join(report["recommendations"]),
     }
+
+
+def _best_platform(report: dict[str, Any]) -> dict[str, Any] | None:
+    best_platform = max(report["platforms"], key=lambda row: (row["clicks"], row["engagement_actions"]), default=None)
+    if best_platform and not (
+        best_platform["clicks"] or best_platform["engagement_actions"] or best_platform["impressions"]
+    ):
+        return None
+    return best_platform
+
+
+def _pdf_table(rows: list[list[Any]], column_widths: list[float], header: bool = False) -> Any:
+    from reportlab.lib import colors
+    from reportlab.platypus import Table, TableStyle
+
+    table = Table(rows, colWidths=column_widths, hAlign="LEFT")
+    style = [
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#273746")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D5DBDB")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]
+    if header:
+        style.extend(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#17202A")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ]
+        )
+    else:
+        style.extend(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8F9F9")),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+            ]
+        )
+    table.setStyle(TableStyle(style))
+    return table
+
+
+def _pdf_escape(value: object) -> str:
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
 
 async def _resolve_metricool_brand(client: httpx.AsyncClient, settings: Settings) -> dict[str, Any]:
