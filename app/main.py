@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
-from app.agents import answer_customer_question, create_social_drafts
+from app.agents import answer_customer_question, create_group_outreach_plan, create_social_drafts, draft_group_reply
 from app.campaigns import campaign_video_catalog, campaign_video_path
 from app.config import get_settings
 from app.ebay import EbayClient
@@ -13,7 +13,15 @@ from app.integrations import extract_customer_message, manychat_dynamic_response
 from app.inventory import InventoryRepository
 from app.inventory_seed import seed_inventory_if_empty
 from app.media import product_card_for_item, product_card_jpeg_for_item
-from app.models import CustomerQuestion, EbayStoreImportRequest, InventoryItem, InventorySearchResult, SocialDraftRequest
+from app.models import (
+    CustomerQuestion,
+    EbayStoreImportRequest,
+    GroupOutreachRequest,
+    GroupReplyRequest,
+    InventoryItem,
+    InventorySearchResult,
+    SocialDraftRequest,
+)
 from app.store_sync import StorePageSyncer
 
 
@@ -160,6 +168,18 @@ async def social_drafts(request: SocialDraftRequest) -> dict[str, Any]:
     return batch.model_dump()
 
 
+@app.post("/agent/group-outreach-plan", response_model=dict[str, Any])
+async def group_outreach_plan(request: GroupOutreachRequest) -> dict[str, Any]:
+    plan = await create_group_outreach_plan(request)
+    return plan.model_dump()
+
+
+@app.post("/agent/group-reply", response_model=dict[str, Any])
+async def group_reply(request: GroupReplyRequest) -> dict[str, Any]:
+    draft = await draft_group_reply(request)
+    return draft.model_dump()
+
+
 @app.post("/webhooks/manychat")
 async def manychat_webhook(
     payload: dict[str, Any],
@@ -212,6 +232,17 @@ async def zapier_social_drafts(
     draft_request = SocialDraftRequest.model_validate(await parse_zapier_body(request))
     batch = await create_social_drafts(draft_request)
     return zapier_social_drafts_response(batch)
+
+
+@app.post("/webhooks/zapier/group-reply")
+async def zapier_group_reply(
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    reply_request = GroupReplyRequest.model_validate(await parse_zapier_body(request))
+    draft = await draft_group_reply(reply_request)
+    return draft.model_dump()
 
 
 @app.post("/webhooks/metricool/inbox")

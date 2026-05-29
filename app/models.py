@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 Channel = Literal["facebook", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web", "unknown"]
 SocialPlatform = Literal["facebook", "instagram", "tiktok", "linkedin"]
+GroupInteractionType = Literal["group_comment", "group_post_comment", "group_dm_to_page", "page_dm", "instagram_dm", "manual"]
 
 
 class InventoryItem(BaseModel):
@@ -106,6 +107,81 @@ class SocialDraftBatch(BaseModel):
     posts: list[SocialPost]
     metricool_payloads: list[dict[str, object]] = Field(default_factory=list)
     notes: str = ""
+
+
+class FacebookGroupLead(BaseModel):
+    name: str
+    url: str | None = None
+    member_count: int | None = None
+    audience_notes: str | None = None
+    rules_text: str | None = None
+    allows_promotions: bool | None = None
+    notes: str | None = None
+
+
+class GroupCandidateReview(BaseModel):
+    name: str
+    url: str | None = None
+    relevance_score: int = Field(ge=0, le=100)
+    recommendation: Literal["prioritize", "review", "skip"]
+    reason: str
+    rule_risks: list[str] = Field(default_factory=list)
+
+
+class GroupPostDraft(BaseModel):
+    group_name: str | None = None
+    campaign_video: str | None = None
+    post_text: str
+    cta: str
+    manual_posting_notes: str
+
+
+class GroupOutreachRequest(BaseModel):
+    campaign_goal: str = "Promote Horizon Wireless eBay listings and wholesale availability."
+    brand_name: str = "Horizon Wireless"
+    audience_keywords: list[str] = Field(default_factory=lambda: ["phone resellers", "electronics wholesale", "eBay sellers"])
+    campaign_video: str | None = None
+    ebay_store_url: str = "https://www.ebay.com/str/exactspec"
+    group_leads: list[FacebookGroupLead] = Field(default_factory=list)
+    notes: str | None = None
+
+    @field_validator("audience_keywords", mode="before")
+    @classmethod
+    def normalize_audience_keywords(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _split_zapier_list(value)
+        return value
+
+
+class GroupOutreachPlan(BaseModel):
+    summary: str
+    candidate_groups: list[GroupCandidateReview] = Field(default_factory=list)
+    join_request_draft: str
+    post_drafts: list[GroupPostDraft] = Field(default_factory=list)
+    compliance_checklist: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class GroupReplyRequest(BaseModel):
+    message: str
+    group_name: str | None = None
+    group_url: str | None = None
+    author_name: str | None = None
+    post_context: str | None = None
+    interaction_type: GroupInteractionType = "group_comment"
+    user_opted_in: bool = False
+    channel: Channel = "facebook"
+    rules_text: str | None = None
+
+
+class GroupReplyDraft(BaseModel):
+    reply: str
+    channel: Channel = "facebook"
+    matched_items: list[InventoryItem] = Field(default_factory=list)
+    needs_human: bool = False
+    manual_review_required: bool = True
+    can_auto_send: bool = False
+    compliance_notes: str
 
 
 def _split_zapier_list(value: str) -> list[str]:
