@@ -57,6 +57,7 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 - `POST /webhooks/metricool/inbox` answers Metricool inbox/comment events routed through Zapier.
 - `GET /reports/daily` returns a daily Metricool effectiveness report.
 - `GET /reports/daily.md` returns the same report as email-ready Markdown.
+- `GET /reports/daily.pdf` returns a polished PDF attachment.
 - `GET` or `POST /webhooks/zapier/daily-report` returns Zapier-friendly report fields.
 
 ## Manychat Flow
@@ -99,7 +100,7 @@ For daily reporting:
 1. Trigger: Schedule by Zapier once per morning.
 2. Action: Webhooks by Zapier `GET https://your-public-service-url/webhooks/zapier/daily-report`.
 3. Optional query: `date=YYYY-MM-DD`. If omitted, the report uses yesterday in Central time.
-4. Action: Email by Zapier, Gmail, Slack, or Google Sheets using `summary_text` and the flat metric fields.
+4. Action: Email by Zapier, Gmail, Slack, or Google Sheets using `email_body` for the message and `attachment_url` for the report PDF.
 
 Example social draft request:
 

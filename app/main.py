@@ -28,6 +28,8 @@ from app.reports import (
     build_daily_metricool_report,
     flatten_report_for_zapier,
     format_daily_report_markdown,
+    format_daily_report_pdf,
+    report_attachment_filename,
 )
 from app.store_sync import StorePageSyncer
 
@@ -122,6 +124,27 @@ async def daily_report_markdown(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
     return Response(content=format_daily_report_markdown(report), media_type="text/markdown")
+
+
+@app.get("/reports/daily.pdf")
+async def daily_report_pdf(
+    request: Request,
+    date: str | None = None,
+    x_horizon_secret: str | None = Header(default=None),
+) -> Response:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    try:
+        report = await build_daily_metricool_report(_parse_report_date(date))
+        report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
+        content = format_daily_report_pdf(report)
+    except MetricoolReportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    filename = report_attachment_filename(report)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.api_route("/webhooks/zapier/daily-report", methods=["GET", "POST"])

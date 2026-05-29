@@ -4,7 +4,12 @@ from datetime import date
 import httpx
 
 from app.config import Settings
-from app.reports import build_daily_metricool_report, flatten_report_for_zapier, format_daily_report_markdown
+from app.reports import (
+    build_daily_metricool_report,
+    flatten_report_for_zapier,
+    format_daily_report_markdown,
+    format_daily_report_pdf,
+)
 
 
 def test_daily_metricool_report_aggregates_platform_metrics():
@@ -113,5 +118,39 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
 
     assert "Horizon Wireless AI Marketing Report" in markdown
     assert flattened["subject"] == "Horizon Wireless AI Marketing Report - 2026-05-29"
+    assert flattened["email_body"].startswith("Attached is the Horizon Wireless AI Marketing Report")
+    assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29")
+    assert flattened["attachment_filename"] == "horizon-ai-marketing-report-2026-05-29.pdf"
     assert flattened["clicks"] == 5
     assert flattened["best_platform"] == "facebook"
+
+
+def test_daily_metricool_report_pdf_renders():
+    report = {
+        "report_date": "2026-05-29",
+        "timezone": "America/Chicago",
+        "brand": {"label": "Horizon Wireless", "blog_id": 6278196},
+        "totals": {
+            "scheduled_posts": 1,
+            "analytics_posts": 1,
+            "published_posts": 1,
+            "pending_posts": 0,
+            "failed_posts": 0,
+            "impressions": 100,
+            "reach": 80,
+            "clicks": 5,
+            "engagement_actions": 10,
+            "engagement_rate": 12.5,
+        },
+        "platforms": [
+            {"platform": "facebook", "posts": 1, "scheduled_posts": 1, "published_posts": 1, "draft_posts": 0, "impressions": 100, "reach": 80, "clicks": 5, "engagement_actions": 10, "engagement_rate": 12.5, "pending_posts": 0, "failed_posts": 0},
+        ],
+        "top_posts": [{"platform": "facebook", "impressions": 100, "reach": 80, "clicks": 5, "engagement_actions": 10, "text": "Shop phones"}],
+        "failures": [],
+        "recommendations": ["Post more iPhone listings."],
+    }
+
+    pdf = format_daily_report_pdf(report)
+
+    assert pdf.startswith(b"%PDF")
+    assert len(pdf) > 1000
