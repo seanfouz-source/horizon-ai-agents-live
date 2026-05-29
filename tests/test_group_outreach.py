@@ -84,3 +84,9 @@ def test_matched_items_from_reply_uses_mentioned_ebay_links(monkeypatch):
     items = agents_module._matched_items_from_reply("Available here: https://www.ebay.com/itm/366436069804?hash=abc")
 
     assert [item.sku for item in items] == ["EBAY-366436069804"]
+
+
+def test_reply_indicates_no_inventory_match():
+    assert agents_module._reply_indicates_no_inventory_match("I don't see any Pixel phones in our inventory.")
+    assert agents_module._reply_indicates_no_inventory_match("That model is not currently available.")
+    assert not agents_module._reply_indicates_no_inventory_match("Yes, this Samsung Galaxy is available.")
