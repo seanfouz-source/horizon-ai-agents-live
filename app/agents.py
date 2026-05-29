@@ -204,6 +204,8 @@ async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer
     mentioned_items = _matched_items_from_reply(reply)
     if mentioned_items:
         matched_items = mentioned_items
+    elif _reply_indicates_no_inventory_match(reply):
+        matched_items = []
     needs_human = any(keyword in question.message.lower() for keyword in ["refund", "return", "order", "tracking", "complaint"])
     return CustomerAnswer(
         reply=reply,
@@ -228,6 +230,24 @@ def _matched_items_from_reply(reply: str):
             items.append(item)
             seen_skus.add(sku)
     return items
+
+
+def _reply_indicates_no_inventory_match(reply: str) -> bool:
+    normalized = reply.lower().replace("\u2019", "'")
+    no_match_phrases = (
+        "don't see",
+        "do not see",
+        "dont see",
+        "don't have",
+        "do not have",
+        "dont have",
+        "not currently",
+        "not in our inventory",
+        "not available",
+        "no matching",
+        "no exact",
+    )
+    return any(phrase in normalized for phrase in no_match_phrases)
 
 
 async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
