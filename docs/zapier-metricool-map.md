@@ -88,6 +88,28 @@ Body:
 }
 ```
 
+Video campaign body:
+
+```json
+{
+  "campaign_video": "wholesale",
+  "campaign_goal": "Promote Horizon Wireless wholesale device availability to resellers and bulk buyers.",
+  "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
+  "posts_per_platform": 1,
+  "brand_name": "Horizon Wireless",
+  "as_draft": false,
+  "auto_publish": true
+}
+```
+
+Use `campaign_video: "ebay-retail-store"` for the eBay retail store video.
+The public media URLs are:
+
+```text
+https://YOUR-PUBLIC-URL/media/campaigns/wholesale.mp4
+https://YOUR-PUBLIC-URL/media/campaigns/ebay-retail-store.mp4
+```
+
 When `publish_after` is omitted, the agent chooses the next weekday busy window
 in Central time: Monday 12:30 or 15:30; Tuesday-Thursday 12:30, 14:30, or
 16:30; Friday 14:30 or 16:30.
@@ -101,6 +123,10 @@ metricool_post_content
 metricool_facebook
 metricool_instagram
 metricool_tiktok
+metricool_linkedin
+metricool_media_01
+metricool_publish_to_facebook_groups
+metricool_facebook_groups
 metricool_as_draft
 metricool_auto_publish
 metricool_post_type
@@ -120,13 +146,25 @@ Brand Name -> choose the connected Metricool brand in the dropdown
 Facebook -> metricool_facebook
 Instagram -> metricool_instagram
 Tiktok -> metricool_tiktok
+LinkedIn -> metricool_linkedin
 Publication Date/Time -> metricool_publication_date_time
 Post content / Text -> metricool_post_content
-Media 01 -> leave blank unless metricool_media_01 has a value
+Media 01 -> metricool_media_01
 As draft -> metricool_as_draft
 Auto publish -> metricool_auto_publish
 Post type -> POST
 ```
+
+If the Metricool Zap action exposes Facebook Group destination fields, map:
+
+```text
+Publish to Facebook Groups -> metricool_publish_to_facebook_groups
+Facebook Groups / Destinations -> metricool_facebook_groups
+```
+
+If those fields are not available, schedule the post to the connected Facebook
+Page and share it manually to approved groups. Manychat's Facebook comment
+automation works on Page posts, not Facebook Group posts.
 
 Optional tracking fields:
 
@@ -154,5 +192,6 @@ Review-first mode sends generated posts to Metricool for approval. Auto-publish
 mode lets Metricool publish at the scheduled time.
 
 For auto-publish, the flat Instagram field is only true when a media URL exists,
-and the flat TikTok field is only true when a video URL exists. This prevents
-Metricool test failures and avoids scheduling invalid text-only TikTok posts.
+and the flat TikTok field is only true when a TikTok-safe media URL exists. The
+app uses generated `.jpg` product cards by default because TikTok Business photo
+posts reject `.png` media.
