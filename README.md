@@ -55,6 +55,9 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 - `POST /webhooks/zapier/customer-question` returns a JSON answer for Zapier.
 - `POST /webhooks/zapier/social-drafts` creates Facebook, Instagram, and TikTok post drafts.
 - `POST /webhooks/metricool/inbox` answers Metricool inbox/comment events routed through Zapier.
+- `GET /reports/daily` returns a daily Metricool effectiveness report.
+- `GET /reports/daily.md` returns the same report as email-ready Markdown.
+- `GET` or `POST /webhooks/zapier/daily-report` returns Zapier-friendly report fields.
 
 ## Manychat Flow
 
@@ -90,6 +93,13 @@ For advertising posts:
 1. Trigger: Schedule, new eBay listing, or manual webhook.
 2. Action: POST a request to `/webhooks/zapier/social-drafts`.
 3. Action: Map each returned `metricool_payloads[]` item into Metricool's `Schedule Post` action.
+
+For daily reporting:
+
+1. Trigger: Schedule by Zapier once per morning.
+2. Action: Webhooks by Zapier `GET https://your-public-service-url/webhooks/zapier/daily-report`.
+3. Optional query: `date=YYYY-MM-DD`. If omitted, the report uses yesterday in Central time.
+4. Action: Email by Zapier, Gmail, Slack, or Google Sheets using `summary_text` and the flat metric fields.
 
 Example social draft request:
 
