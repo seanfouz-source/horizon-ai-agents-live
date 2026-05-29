@@ -1,5 +1,6 @@
 import json
 import re
+from typing import cast
 
 from agents import Agent, Runner, function_tool
 
@@ -14,9 +15,12 @@ from app.models import (
     GroupOutreachRequest,
     GroupReplyDraft,
     GroupReplyRequest,
+    InventoryItem,
     SocialDraftBatch,
     SocialDraftPlan,
     SocialDraftRequest,
+    SocialPlatform,
+    SocialPost,
 )
 
 
@@ -79,6 +83,22 @@ STOPWORDS = {
     "with",
     "you",
     "your",
+}
+
+PHONE_KEYWORDS = {
+    "iphone",
+    "samsung",
+    "galaxy",
+    "motorola",
+    "moto",
+    "pixel",
+    "phone",
+    "smartphone",
+    "oneplus",
+    "nokia",
+    "xperia",
+    "flip",
+    "edge",
 }
 
 
@@ -251,6 +271,9 @@ def _reply_indicates_no_inventory_match(reply: str) -> bool:
 
 
 async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
+    if request.promote_all_inventory:
+        return _create_all_inventory_social_drafts(request)
+
     campaign_media_url = request_campaign_media_url(request)
     prompt = (
         "Create social drafts for this eBay promotion request.\n"
@@ -284,6 +307,131 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
             post.suggested_schedule = publication_time
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     return batch
+
+
+def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
+    repository = get_repository()
+    items = _inventory_items_for_daily_promotion(repository, request)
+    if not items:
+        return SocialDraftBatch(
+            campaign_name="Daily all-inventory promotion",
+            posts=[],
+            notes="No in-stock inventory items matched the daily promotion request.",
+        )
+
+    posts: list[SocialPost] = []
+    campaign_media_url = request_campaign_media_url(request)
+    if request.cross_post_to_all_platforms:
+        platform = request.platforms[0] if request.platforms else "facebook"
+        posts = [
+            _inventory_social_post(item, request, platform=platform, media_url=campaign_media_url)
+            for item in items
+        ]
+    else:
+        for item in items:
+            for platform in request.platforms:
+                posts.append(_inventory_social_post(item, request, platform=platform, media_url=campaign_media_url))
+
+    if not request.publish_after:
+        default_schedule = default_metricool_publication_times(len(posts))
+        for post, publication_time in zip(posts, default_schedule, strict=False):
+            post.suggested_schedule = publication_time
+
+    batch = SocialDraftBatch(
+        campaign_name="Daily all-inventory promotion",
+        posts=posts,
+        notes=(
+            f"Generated {len(posts)} scheduled post payloads from {len(items)} in-stock inventory items. "
+            "Use the metricool_*_items fields or loop over metricool_payloads in Zapier to schedule every item."
+        ),
+    )
+    batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
+    return batch
+
+
+def _inventory_items_for_daily_promotion(repository: InventoryRepository, request: SocialDraftRequest) -> list[InventoryItem]:
+    if request.sku:
+        item = repository.get(request.sku)
+        return [item] if item and item.quantity > 0 else []
+    query = request.query.strip().lower() if request.query else ""
+    if query in {"all phones", "phones"}:
+        return [
+            item
+            for item in repository.all_promotable(limit=request.max_products_per_run)
+            if _looks_like_phone(item)
+        ]
+    if query and query not in {"all", "all inventory", "daily inventory"}:
+        return repository.search(request.query, limit=request.max_products_per_run)
+    return repository.all_promotable(limit=request.max_products_per_run)
+
+
+def _looks_like_phone(item: InventoryItem) -> bool:
+    haystack = " ".join(
+        [
+            item.title,
+            item.description or "",
+            item.category or "",
+            " ".join(str(value) for value in item.item_specifics.values()),
+        ]
+    ).lower()
+    return any(keyword in haystack for keyword in PHONE_KEYWORDS)
+
+
+def _inventory_social_post(
+    item: InventoryItem,
+    request: SocialDraftRequest,
+    platform: str,
+    media_url: str | None = None,
+) -> SocialPost:
+    return SocialPost(
+        platform=cast(SocialPlatform, platform),
+        text=_inventory_post_text(item, request, platform),
+        product_sku=item.sku,
+        product_title=item.title,
+        ebay_url=item.ebay_url,
+        media_url=media_url or request.media_url,
+        hashtags=_hashtags_for_item(item),
+    )
+
+
+def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
+    brand = request.brand_name or "Horizon Wireless"
+    price = _price_text(item)
+    condition = f" Condition: {item.condition}." if item.condition else ""
+    url = item.ebay_url or get_settings().ebay_store_url
+    title = item.title.strip()
+    if request.cross_post_to_all_platforms:
+        return (
+            f"{brand} listing update: {title}.{price}{condition} "
+            f"View full details and purchase on eBay: {url}"
+        )
+    if platform == "instagram":
+        return f"Now listed at {brand}: {title}.{price}{condition} Shop the eBay listing: {url}"
+    if platform == "tiktok":
+        return f"{title} is live in the {brand} eBay store.{price}{condition} Details: {url}"
+    if platform == "linkedin":
+        return f"{brand} inventory update: {title}.{price}{condition} View the eBay listing: {url}"
+    return f"{title} is available now from {brand}.{price}{condition} View full details and purchase on eBay: {url}"
+
+
+def _price_text(item: InventoryItem) -> str:
+    if item.price is None:
+        return ""
+    if float(item.price).is_integer():
+        return f" Price: ${int(item.price)}."
+    return f" Price: ${item.price:.2f}."
+
+
+def _hashtags_for_item(item: InventoryItem) -> list[str]:
+    normalized = item.title.lower()
+    hashtags = ["HorizonWireless", "eBayFinds"]
+    if "iphone" in normalized:
+        hashtags.append("iPhone")
+    if "samsung" in normalized or "galaxy" in normalized:
+        hashtags.append("SamsungGalaxy")
+    if "pixel" in normalized:
+        hashtags.append("GooglePixel")
+    return hashtags
 
 
 async def create_group_outreach_plan(request: GroupOutreachRequest) -> GroupOutreachPlan:
