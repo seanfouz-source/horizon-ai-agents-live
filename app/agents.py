@@ -5,7 +5,7 @@ from agents import Agent, Runner, function_tool
 
 from app.campaigns import request_campaign_media_url
 from app.config import get_settings
-from app.integrations import metricool_payload
+from app.integrations import default_metricool_publication_times, metricool_payload
 from app.inventory import InventoryRepository
 from app.models import (
     CustomerAnswer,
@@ -257,6 +257,11 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
     if campaign_media_url:
         for post in batch.posts:
             post.media_url = campaign_media_url
+    if batch.posts and not request.publish_after:
+        default_schedule = default_metricool_publication_times(len(batch.posts))
+        for post, publication_time in zip(batch.posts, default_schedule, strict=False):
+            if not post.suggested_schedule:
+                post.suggested_schedule = publication_time
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     return batch
 

@@ -1,7 +1,12 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.integrations import default_metricool_publication_time, metricool_payload, zapier_social_drafts_response
+from app.integrations import (
+    default_metricool_publication_time,
+    default_metricool_publication_times,
+    metricool_payload,
+    zapier_social_drafts_response,
+)
 from app.models import SocialDraftBatch, SocialDraftRequest, SocialPost
 
 
@@ -237,15 +242,28 @@ def test_zapier_social_drafts_response_flattens_facebook_groups():
     assert response["metricool_facebook_groups"] == "Wireless Wholesale Buyers, Phone Resellers"
 
 
-def test_default_metricool_publication_time_uses_next_busy_slot():
+def test_default_metricool_publication_time_uses_next_daily_slot():
     central = ZoneInfo("America/Chicago")
     now = datetime(2026, 5, 26, 9, 0, tzinfo=central)
 
-    assert default_metricool_publication_time(now) == "2026-05-26 12:30:00"
+    assert default_metricool_publication_time(now) == "2026-05-26 10:30:00"
 
 
-def test_default_metricool_publication_time_skips_weekend():
+def test_default_metricool_publication_time_uses_evening_and_weekend_slots():
     central = ZoneInfo("America/Chicago")
     now = datetime(2026, 5, 29, 17, 30, tzinfo=central)
 
-    assert default_metricool_publication_time(now) == "2026-06-01 12:30:00"
+    assert default_metricool_publication_time(now) == "2026-05-29 18:00:00"
+
+
+def test_default_metricool_publication_times_stagger_across_the_day():
+    central = ZoneInfo("America/Chicago")
+    now = datetime(2026, 5, 26, 7, 0, tzinfo=central)
+
+    assert default_metricool_publication_times(5, now) == [
+        "2026-05-26 07:30:00",
+        "2026-05-26 09:00:00",
+        "2026-05-26 10:30:00",
+        "2026-05-26 12:00:00",
+        "2026-05-26 13:30:00",
+    ]
