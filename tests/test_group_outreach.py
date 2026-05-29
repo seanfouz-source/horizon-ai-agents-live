@@ -65,3 +65,22 @@ def test_opted_in_page_dm_can_auto_send(monkeypatch):
     assert draft.can_auto_send is True
     assert draft.manual_review_required is False
     assert "supported inbound DM" in draft.compliance_notes
+
+
+def test_matched_items_from_reply_uses_mentioned_ebay_links(monkeypatch):
+    class FakeRepository:
+        def get(self, sku):
+            if sku != "EBAY-366436069804":
+                return None
+            return InventoryItem(
+                sku=sku,
+                title="Samsung Galaxy Z Flip 5",
+                quantity=1,
+                ebay_url="https://www.ebay.com/itm/366436069804",
+            )
+
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository())
+
+    items = agents_module._matched_items_from_reply("Available here: https://www.ebay.com/itm/366436069804?hash=abc")
+
+    assert [item.sku for item in items] == ["EBAY-366436069804"]

@@ -200,6 +200,9 @@ async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer
     result = await Runner.run(_customer_agent(), prompt, max_turns=5)
     matched_items = _matched_items_for_message(question.message)
     reply = str(result.final_output).strip()
+    mentioned_items = _matched_items_from_reply(reply)
+    if mentioned_items:
+        matched_items = mentioned_items
     needs_human = any(keyword in question.message.lower() for keyword in ["refund", "return", "order", "tracking", "complaint"])
     return CustomerAnswer(
         reply=reply,
@@ -207,6 +210,23 @@ async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer
         matched_items=matched_items,
         needs_human=needs_human,
     )
+
+
+def _matched_items_from_reply(reply: str):
+    repository = get_repository()
+    items = []
+    seen_skus = set()
+    item_ids = re.findall(r"ebay\.com/itm/(?:[^/?#\s]+/)?(\d+)", reply)
+    item_ids.extend(re.findall(r"\bEBAY-(\d+)\b", reply))
+    for item_id in item_ids:
+        sku = f"EBAY-{item_id}"
+        if sku in seen_skus:
+            continue
+        item = repository.get(sku)
+        if item:
+            items.append(item)
+            seen_skus.add(sku)
+    return items
 
 
 async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
