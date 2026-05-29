@@ -86,6 +86,39 @@ Use Zapier's Metricool action named `Schedule Post`.
 
 Start with `as_draft = true` and `auto_publish = false`. That keeps the first posts in Metricool for human approval before anything goes live.
 
+For the Horizon Wireless videos, use the same social-drafts webhook with:
+
+```json
+{
+  "campaign_video": "wholesale",
+  "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
+  "brand_name": "Horizon Wireless",
+  "as_draft": false,
+  "auto_publish": true
+}
+```
+
+Then repeat with:
+
+```json
+{
+  "campaign_video": "ebay-retail-store",
+  "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
+  "brand_name": "Horizon Wireless",
+  "as_draft": false,
+  "auto_publish": true
+}
+```
+
+The app serves the videos at `/media/campaigns/wholesale.mp4` and
+`/media/campaigns/ebay-retail-store.mp4` so Metricool receives public HTTPS MP4
+links instead of local files.
+
+Facebook Groups are only safe to automate when the group and scheduler support
+the destination directly. If the Metricool Zap action does not show a group
+destination field, schedule to the Facebook Page and share into approved groups
+manually.
+
 ## 7. Go Live Carefully
 
 Before turning on automation:

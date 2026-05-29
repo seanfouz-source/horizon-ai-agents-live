@@ -83,3 +83,11 @@ Body:
 3. Send the body above.
 4. Add a fallback block that says a human will follow up if the external request fails.
 5. Test with one phrase, such as `Do you have a blue switch keyboard?`
+
+## Platform Notes
+
+Manychat can respond when a shopper messages Horizon Wireless or triggers a
+supported comment-to-message flow on Horizon's own Page or account posts.
+Facebook Group comments are not supported by Manychat's Facebook comments
+trigger, so group engagement should route people back to Messenger, Instagram
+DMs, TikTok DMs, or a Page post where Manychat can legally respond.

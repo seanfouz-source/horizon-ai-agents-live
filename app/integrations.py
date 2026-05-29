@@ -2,6 +2,7 @@ from datetime import datetime, time, timedelta, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from app.campaigns import request_campaign_media_url
 from app.config import get_settings
 from app.models import CustomerAnswer, SocialDraftBatch, SocialDraftRequest, SocialPost
 
@@ -66,13 +67,16 @@ def manychat_dynamic_response(answer: CustomerAnswer) -> dict[str, object]:
 
 def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str, object]:
     publication_date_time = post.suggested_schedule or request.publish_after or default_metricool_publication_time()
-    media_url = _metricool_media_url(post)
+    media_url = _metricool_media_url(post, request)
+    facebook_groups = request.facebook_groups if post.platform == "facebook" and request.facebook_groups else None
     payload: dict[str, object] = {
         "brand_name": request.brand_name,
         "facebook": post.platform == "facebook",
         "instagram": post.platform == "instagram",
         "tiktok": post.platform == "tiktok",
         "linkedin": post.platform == "linkedin",
+        "publish_to_facebook_groups": request.publish_to_facebook_groups if post.platform == "facebook" else None,
+        "facebook_groups": facebook_groups,
         "publication_date_time": publication_date_time,
         "post_content": post.text,
         "media_01": media_url,
@@ -112,12 +116,20 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
             ),
             flat_media_url,
         )
+    facebook_groups = next(
+        (payload.get("facebook_groups") for payload in batch.metricool_payloads if payload.get("facebook_groups")),
+        None,
+    )
     flat_fields = {
         "metricool_brand_name": first_payload.get("brand_name"),
         "metricool_facebook": platform_flags["facebook"],
         "metricool_instagram": platform_flags["instagram"],
         "metricool_tiktok": platform_flags["tiktok"],
         "metricool_linkedin": platform_flags["linkedin"],
+        "metricool_publish_to_facebook_groups": any(
+            payload.get("publish_to_facebook_groups") for payload in batch.metricool_payloads
+        ),
+        "metricool_facebook_groups": _csv_value(facebook_groups),
         "metricool_publication_date_time": first_payload.get("publication_date_time"),
         "metricool_post_content": first_payload.get("post_content"),
         "metricool_media_01": flat_media_url,
@@ -147,10 +159,19 @@ def _is_tiktok_supported_media(value: object) -> bool:
     return path.endswith((".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"))
 
 
-def _metricool_media_url(post: SocialPost) -> str | None:
-    if post.media_url:
-        if post.platform != "tiktok" or _is_tiktok_supported_media(post.media_url):
-            return post.media_url
+def _csv_value(value: object) -> str | None:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value if str(item).strip()) or None
+    if value:
+        return str(value)
+    return None
+
+
+def _metricool_media_url(post: SocialPost, request: SocialDraftRequest | None = None) -> str | None:
+    media_url = post.media_url or request_campaign_media_url(request)
+    if media_url:
+        if post.platform != "tiktok" or _is_tiktok_supported_media(media_url):
+            return media_url
         return generated_product_media_url(post.product_sku)
     return generated_product_media_url(post.product_sku)
 
