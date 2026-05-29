@@ -91,3 +91,7 @@ supported comment-to-message flow on Horizon's own Page or account posts.
 Facebook Group comments are not supported by Manychat's Facebook comments
 trigger, so group engagement should route people back to Messenger, Instagram
 DMs, TikTok DMs, or a Page post where Manychat can legally respond.
+
+For Facebook Group comments, use `/agent/group-reply` or
+`/webhooks/zapier/group-reply` as a reply draft generator. Only auto-send when
+the response returns `can_auto_send: true`.
