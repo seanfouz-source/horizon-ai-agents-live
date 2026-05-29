@@ -3,8 +3,10 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 
 from app.agents import answer_customer_question, create_social_drafts
+from app.campaigns import campaign_video_catalog, campaign_video_path
 from app.config import get_settings
 from app.ebay import EbayClient
 from app.integrations import extract_customer_message, manychat_dynamic_response, normalize_channel, zapier_social_drafts_response
@@ -69,6 +71,38 @@ def product_media_jpeg(sku: str) -> Response:
         content=product_card_jpeg_for_item(item),
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/campaigns/videos")
+def campaign_videos() -> dict[str, object]:
+    return {"videos": campaign_video_catalog()}
+
+
+@app.get("/media/campaigns/{slug}.mp4")
+def campaign_video_media(slug: str) -> FileResponse:
+    path = campaign_video_path(slug)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="No campaign video found for that slug.")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.head("/media/campaigns/{slug}.mp4")
+def campaign_video_media_head(slug: str) -> Response:
+    path = campaign_video_path(slug)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="No campaign video found for that slug.")
+    return Response(
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(path.stat().st_size),
+        },
     )
 
 

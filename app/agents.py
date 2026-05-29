@@ -3,6 +3,7 @@ import re
 
 from agents import Agent, Runner, function_tool
 
+from app.campaigns import request_campaign_media_url
 from app.config import get_settings
 from app.integrations import metricool_payload
 from app.inventory import InventoryRepository
@@ -174,10 +175,16 @@ async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer
 
 
 async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
+    campaign_media_url = request_campaign_media_url(request)
     prompt = (
         "Create social drafts for this eBay promotion request.\n"
         f"{request.model_dump_json(indent=2)}"
     )
+    if campaign_media_url:
+        prompt += (
+            "\nUse this campaign media URL for every generated post and write the copy so it fits the video: "
+            f"{campaign_media_url}"
+        )
     result = await Runner.run(_social_agent(), prompt, max_turns=6)
     plan = result.final_output
     if isinstance(plan, SocialDraftPlan):
@@ -192,5 +199,8 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
             posts=[],
             notes=str(plan),
         )
+    if campaign_media_url:
+        for post in batch.posts:
+            post.media_url = campaign_media_url
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     return batch

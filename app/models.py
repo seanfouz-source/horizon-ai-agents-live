@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 Channel = Literal["facebook", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web", "unknown"]
@@ -58,9 +58,29 @@ class SocialDraftRequest(BaseModel):
     platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok", "linkedin"])
     posts_per_platform: int = Field(default=1, ge=1, le=5)
     brand_name: str | None = None
+    media_url: str | None = None
+    campaign_video: str | None = None
+    facebook_groups: list[str] = Field(default_factory=list)
+    publish_to_facebook_groups: bool = False
     publish_after: str | None = None
     as_draft: bool = True
     auto_publish: bool = False
+
+    @field_validator("platforms", mode="before")
+    @classmethod
+    def normalize_platform_list(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _split_zapier_list(value)
+        return value
+
+    @field_validator("facebook_groups", mode="before")
+    @classmethod
+    def normalize_facebook_groups(cls, value: object) -> object:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return _split_zapier_list(value)
+        return value
 
 
 class SocialPost(BaseModel):
@@ -86,3 +106,7 @@ class SocialDraftBatch(BaseModel):
     posts: list[SocialPost]
     metricool_payloads: list[dict[str, object]] = Field(default_factory=list)
     notes: str = ""
+
+
+def _split_zapier_list(value: str) -> list[str]:
+    return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
