@@ -265,7 +265,7 @@ async def create_group_outreach_plan(request: GroupOutreachRequest) -> GroupOutr
 async def draft_group_reply(request: GroupReplyRequest) -> GroupReplyDraft:
     answer = await answer_customer_question(
         CustomerQuestion(
-            message=_group_reply_message(request),
+            message=request.message,
             channel=request.channel,
             user_id=request.author_name,
             first_name=request.author_name,
@@ -273,6 +273,8 @@ async def draft_group_reply(request: GroupReplyRequest) -> GroupReplyDraft:
                 "group_name": request.group_name or "",
                 "group_url": request.group_url or "",
                 "interaction_type": request.interaction_type,
+                "post_context": request.post_context or "",
+                "rules_text": request.rules_text or "",
             },
         )
     )
@@ -286,19 +288,6 @@ async def draft_group_reply(request: GroupReplyRequest) -> GroupReplyDraft:
         can_auto_send=can_auto_send,
         compliance_notes=_group_reply_compliance_note(request, can_auto_send),
     )
-
-
-def _group_reply_message(request: GroupReplyRequest) -> str:
-    context = []
-    if request.group_name:
-        context.append(f"Facebook Group: {request.group_name}")
-    if request.post_context:
-        context.append(f"Post context: {request.post_context}")
-    if request.rules_text:
-        context.append(f"Group rules: {request.rules_text}")
-    context.append(f"Member message: {request.message}")
-    return "\n".join(context)
-
 
 def _can_auto_send_group_reply(request: GroupReplyRequest) -> bool:
     return request.interaction_type in {"group_dm_to_page", "page_dm", "instagram_dm"} and request.user_opted_in
