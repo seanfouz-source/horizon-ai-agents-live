@@ -388,30 +388,45 @@ def _inventory_social_post(
         text=_inventory_post_text(item, request, platform),
         product_sku=item.sku,
         product_title=item.title,
-        ebay_url=item.ebay_url,
+        ebay_url=_buy_url_for_item(item),
         media_url=media_url or request.media_url,
-        hashtags=_hashtags_for_item(item),
-    )
-
-
-def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
+        hashtags=_hashtags_for_item(item)def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
     brand = request.brand_name or "Horizon Wireless"
     price = _price_text(item)
     condition = f" Condition: {item.condition}." if item.condition else ""
-    url = item.ebay_url or get_settings().ebay_store_url
+    url = _buy_url_for_item(item)
     title = item.title.strip()
+    buy_line = f"Buy on eBay: {url}"
     if request.cross_post_to_all_platforms:
         return (
-            f"{brand} listing update: {title}.{price}{condition} "
-            f"View full details and purchase on eBay: {url}"
+            f"{brand} listing update: {title}.{price}{condition}\n"
+            f"{buy_line}"
         )
     if platform == "instagram":
-        return f"Now listed at {brand}: {title}.{price}{condition} Shop the eBay listing: {url}"
+        return f"Now listed at {brand}: {title}.{price}{condition}\n{buy_line}"
     if platform == "tiktok":
-        return f"{title} is live in the {brand} eBay store.{price}{condition} Details: {url}"
+        return f"{title} is live in the {brand} eBay store.{price}{condition}\n{buy_line}"
     if platform == "linkedin":
-        return f"{brand} inventory update: {title}.{price}{condition} View the eBay listing: {url}"
-    return f"{title} is available now from {brand}.{price}{condition} View full details and purchase on eBay: {url}"
+        return f"{brand} inventory update: {title}.{price}{condition}\n{buy_line}"
+    return f"{title} is available now from {brand}.{price}{condition}\n{buy_line}"
+
+
+def _buy_url_for_item(item: InventoryItem) -> str:
+    if item.ebay_item_id:
+        return f"https://www.ebay.com/itm/{item.ebay_item_id}"
+    if item.ebay_url:
+        canonical = _canonical_ebay_item_url(item.ebay_url)
+        return canonical or item.ebay_url
+    return get_settings().ebay_store_url
+
+
+def _canonical_ebay_item_url(url: str) -> str | None:
+    match = re.search(r"/itm/(?:[^/?#]+/)?(\d+)", url)
+    if not match:
+        return None
+    return f"https://www.ebay.com/itm/{match.group(1)}"
+
+ {url}"
 
 
 def _price_text(item: InventoryItem) -> str:
