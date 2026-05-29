@@ -99,6 +99,9 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         "product_sku": post.product_sku,
         "product_title": post.product_title,
         "ebay_url": post.ebay_url,
+        "buy_url": post.ebay_url,
+        "link_url": post.ebay_url,
+        "facebook_link_url": post.ebay_url,
     }
     return {key: value for key, value in payload.items() if value is not None}
 
@@ -152,6 +155,9 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "metricool_product_sku": first_payload.get("product_sku"),
         "metricool_product_title": first_payload.get("product_title"),
         "metricool_ebay_url": first_payload.get("ebay_url"),
+        "metricool_buy_url": first_payload.get("buy_url"),
+        "metricool_link_url": first_payload.get("link_url"),
+        "metricool_facebook_link_url": first_payload.get("facebook_link_url"),
         "publicationDate": first_payload.get("publication_date_time"),
     }
     response.update({key: value for key, value in flat_fields.items() if value is not None})
@@ -180,6 +186,9 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
         "product_sku",
         "product_title",
         "ebay_url",
+        "buy_url",
+        "link_url",
+        "facebook_link_url",
     )
     line_items: dict[str, object] = {"metricool_payload_count": len(payloads)}
     for field in fields:

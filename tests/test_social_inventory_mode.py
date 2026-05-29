@@ -69,7 +69,10 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
         assert payload["auto_publish"] is True
         assert payload["media_01"].endswith(f"{payload['product_sku']}.jpg")
         assert payload["publication_date_time"].startswith("2026-05-29")
-        assert "View full details and purchase on eBay" in payload["post_content"]
+        assert "\nBuy on eBay: https://www.ebay.com/itm/" in payload["post_content"]
+        assert payload["buy_url"] == payload["ebay_url"]
+        assert payload["link_url"] == payload["ebay_url"]
+        assert payload["facebook_link_url"] == payload["ebay_url"]
 
 
 def test_all_inventory_mode_can_filter_by_query(monkeypatch):

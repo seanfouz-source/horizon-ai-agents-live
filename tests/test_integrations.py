@@ -25,6 +25,10 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
                 "as_draft": True,
                 "auto_publish": False,
                 "post_type": "POST",
+                "ebay_url": "https://www.ebay.com/itm/1",
+                "buy_url": "https://www.ebay.com/itm/1",
+                "link_url": "https://www.ebay.com/itm/1",
+                "facebook_link_url": "https://www.ebay.com/itm/1",
             },
             {
                 "brand_name": "ExactSpec",
@@ -75,6 +79,10 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
     assert response["metricool_linkedin"] is True
     assert response["metricool_as_draft"] is True
     assert response["metricool_payload_count"] == 4
+    assert response["metricool_ebay_url"] == "https://www.ebay.com/itm/1"
+    assert response["metricool_buy_url"] == "https://www.ebay.com/itm/1"
+    assert response["metricool_link_url"] == "https://www.ebay.com/itm/1"
+    assert response["metricool_facebook_link_url"] == "https://www.ebay.com/itm/1"
     assert response["metricool_post_content_items"] == [
         "Shop this ExactSpec listing.",
         "Shop this ExactSpec listing.",
@@ -87,6 +95,10 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
         "2026-05-25 05:46:21",
         "2026-05-25 05:46:21",
     ]
+    assert response["metricool_ebay_url_items"][0] == "https://www.ebay.com/itm/1"
+    assert response["metricool_buy_url_items"][0] == "https://www.ebay.com/itm/1"
+    assert response["metricool_link_url_items"][0] == "https://www.ebay.com/itm/1"
+    assert response["metricool_facebook_link_url_items"][0] == "https://www.ebay.com/itm/1"
 
 
 def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
@@ -149,6 +161,7 @@ def test_metricool_payload_replaces_tiktok_png_with_generated_jpeg():
             text="Shop this listing.",
             product_sku="EBAY-123",
             product_title="Demo Phone",
+            ebay_url="https://www.ebay.com/itm/123",
             media_url="https://example.com/product-card.png",
         ),
         SocialDraftRequest(brand_name="ExactSpec"),
@@ -210,6 +223,7 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
             text="Shop this listing.",
             product_sku="EBAY-123",
             product_title="Demo Phone",
+            ebay_url="https://www.ebay.com/itm/123",
             media_url="https://example.com/product-card.png",
         ),
         SocialDraftRequest(
@@ -226,6 +240,9 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
     assert payload["tiktok"] is True
     assert payload["linkedin"] is True
     assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+    assert payload["buy_url"] == "https://www.ebay.com/itm/123"
+    assert payload["link_url"] == "https://www.ebay.com/itm/123"
+    assert payload["facebook_link_url"] == "https://www.ebay.com/itm/123"
 
 
 def test_zapier_social_drafts_response_uses_tiktok_safe_flat_media():

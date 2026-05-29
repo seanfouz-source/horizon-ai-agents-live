@@ -132,6 +132,10 @@ metricool_media_01_items
 metricool_as_draft_items
 metricool_auto_publish_items
 metricool_product_sku_items
+metricool_ebay_url_items
+metricool_buy_url_items
+metricool_link_url_items
+metricool_facebook_link_url_items
 metricool_publication_date_time
 metricool_post_content
 metricool_facebook
@@ -141,6 +145,10 @@ metricool_linkedin
 metricool_media_01
 metricool_publish_to_facebook_groups
 metricool_facebook_groups
+metricool_ebay_url
+metricool_buy_url
+metricool_link_url
+metricool_facebook_link_url
 metricool_as_draft
 metricool_auto_publish
 metricool_post_type
@@ -165,10 +173,17 @@ LinkedIn -> metricool_linkedin
 Publication Date/Time -> metricool_publication_date_time
 Post content / Text -> metricool_post_content
 Media 01 -> metricool_media_01
+Link URL / URL, if available -> metricool_link_url
 As draft -> metricool_as_draft
 Auto publish -> metricool_auto_publish
 Post type -> POST
 ```
+
+For Facebook eBay product posts, keep the eBay URL in the caption and map any
+Metricool link/URL field that Zapier exposes to `metricool_link_url` or the
+current loop item's `link_url`. The generated caption also ends with its own
+`Buy on eBay: https://www.ebay.com/itm/...` line so Facebook has a visible
+purchase link even when a separate link field is unavailable.
 
 If the Metricool Zap action exposes Facebook Group destination fields, map:
 

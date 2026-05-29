@@ -119,7 +119,9 @@ Example social draft request:
 When `promote_all_inventory` is true, the app creates one Metricool payload per
 in-stock listing. By default each payload cross-posts to every requested
 platform, so 18 in-stock phones produce 18 scheduled Metricool posts instead of
-only the first phone.
+only the first phone. Product captions end with a visible `Buy on eBay:` line,
+and the Zapier response also includes `metricool_link_url` fields for Metricool
+link/URL mappings when that field is available.
 
 ## eBay Inventory
 
