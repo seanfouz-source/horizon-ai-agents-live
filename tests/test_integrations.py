@@ -158,6 +158,21 @@ def test_metricool_payload_uses_campaign_video_for_tiktok():
     assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/campaigns/ebay-retail-store.mp4"
 
 
+def test_metricool_payload_ignores_descriptive_ai_schedule(monkeypatch):
+    monkeypatch.setattr("app.integrations.default_metricool_publication_time", lambda: "2026-05-26 07:30:00")
+
+    payload = metricool_payload(
+        SocialPost(
+            platform="facebook",
+            text="Wholesale devices available from Horizon Wireless.",
+            suggested_schedule="Weekday morning (9-11 AM)",
+        ),
+        SocialDraftRequest(brand_name="Horizon Wireless"),
+    )
+
+    assert payload["publication_date_time"] == "2026-05-26 07:30:00"
+
+
 def test_metricool_payload_adds_facebook_group_targets():
     payload = metricool_payload(
         SocialPost(

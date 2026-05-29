@@ -9,6 +9,7 @@ from app.models import CustomerAnswer, SocialDraftBatch, SocialDraftRequest, Soc
 
 POSTING_TIMEZONE = ZoneInfo("America/Chicago")
 POSTING_MINIMUM_LEAD_TIME = timedelta(minutes=30)
+METRICOOL_PUBLICATION_FORMAT = "%Y-%m-%d %H:%M:%S"
 DAILY_POSTING_SLOTS = (
     time(7, 30),
     time(9, 0),
@@ -73,7 +74,7 @@ def manychat_dynamic_response(answer: CustomerAnswer) -> dict[str, object]:
 
 
 def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str, object]:
-    publication_date_time = post.suggested_schedule or request.publish_after or default_metricool_publication_time()
+    publication_date_time = _metricool_publication_time(post, request)
     media_url = _metricool_media_url(post, request)
     facebook_groups = request.facebook_groups if post.platform == "facebook" and request.facebook_groups else None
     payload: dict[str, object] = {
@@ -191,6 +192,21 @@ def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str 
         clean_extension = "jpg"
     base_url = get_settings().public_base_url.rstrip("/")
     return f"{base_url}/media/products/{quote(sku, safe='')}.{clean_extension}"
+
+
+def _metricool_publication_time(post: SocialPost, request: SocialDraftRequest) -> str:
+    return _valid_metricool_publication_time(post.suggested_schedule) or request.publish_after or default_metricool_publication_time()
+
+
+def _valid_metricool_publication_time(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = value.strip()
+    try:
+        datetime.strptime(candidate, METRICOOL_PUBLICATION_FORMAT)
+    except ValueError:
+        return None
+    return candidate
 
 
 def default_metricool_publication_time(now: datetime | None = None) -> str:
