@@ -110,9 +110,10 @@ https://YOUR-PUBLIC-URL/media/campaigns/wholesale.mp4
 https://YOUR-PUBLIC-URL/media/campaigns/ebay-retail-store.mp4
 ```
 
-When `publish_after` is omitted, the agent chooses the next weekday busy window
-in Central time: Monday 12:30 or 15:30; Tuesday-Thursday 12:30, 14:30, or
-16:30; Friday 14:30 or 16:30.
+When `publish_after` is omitted, the agent staggers posts throughout every day
+in Central time: 07:30, 09:00, 10:30, 12:00, 13:30, 15:00, 16:30, 18:00,
+19:30, 21:00, and 22:30. If more posts are generated than slots left today,
+the schedule continues on the next day.
 
 Response fields:
 
