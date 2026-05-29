@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -21,6 +22,12 @@ from app.models import (
     InventoryItem,
     InventorySearchResult,
     SocialDraftRequest,
+)
+from app.reports import (
+    MetricoolReportError,
+    build_daily_metricool_report,
+    flatten_report_for_zapier,
+    format_daily_report_markdown,
 )
 from app.store_sync import StorePageSyncer
 
@@ -85,6 +92,53 @@ def product_media_jpeg(sku: str) -> Response:
 @app.get("/campaigns/videos")
 def campaign_videos() -> dict[str, object]:
     return {"videos": campaign_video_catalog()}
+
+
+@app.get("/reports/daily")
+async def daily_report(
+    request: Request,
+    date: str | None = None,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    try:
+        report = await build_daily_metricool_report(_parse_report_date(date))
+    except MetricoolReportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
+    return report
+
+
+@app.get("/reports/daily.md")
+async def daily_report_markdown(
+    request: Request,
+    date: str | None = None,
+    x_horizon_secret: str | None = Header(default=None),
+) -> Response:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    try:
+        report = await build_daily_metricool_report(_parse_report_date(date))
+    except MetricoolReportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
+    return Response(content=format_daily_report_markdown(report), media_type="text/markdown")
+
+
+@app.api_route("/webhooks/zapier/daily-report", methods=["GET", "POST"])
+async def zapier_daily_report(
+    request: Request,
+    date: str | None = None,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    body = await parse_zapier_body(request) if request.method == "POST" else {}
+    report_date = _parse_report_date(date or body.get("date"))
+    try:
+        report = await build_daily_metricool_report(report_date)
+    except MetricoolReportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
+    return flatten_report_for_zapier(report)
 
 
 @app.get("/media/campaigns/{slug}.mp4")
@@ -295,3 +349,14 @@ async def parse_zapier_body(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Zapier payload must be a JSON object.")
 
     return payload
+
+
+def _parse_report_date(value: object) -> date | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Report date must be a YYYY-MM-DD string.")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Report date must use YYYY-MM-DD format.") from exc
