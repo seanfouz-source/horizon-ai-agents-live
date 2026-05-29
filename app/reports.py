@@ -129,6 +129,10 @@ def flatten_report_for_zapier(report: dict[str, Any]) -> dict[str, Any]:
     markdown = format_daily_report_markdown(report)
     totals = report["totals"]
     best_platform = max(report["platforms"], key=lambda row: (row["clicks"], row["engagement_actions"]), default=None)
+    if best_platform and not (
+        best_platform["clicks"] or best_platform["engagement_actions"] or best_platform["impressions"]
+    ):
+        best_platform = None
     return {
         "report_date": report["report_date"],
         "subject": f"Horizon Wireless AI Marketing Report - {report['report_date']}",
