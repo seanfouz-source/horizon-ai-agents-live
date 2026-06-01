@@ -272,7 +272,7 @@ def report_attachment_filename(report: dict[str, Any]) -> str:
 
 def report_attachment_url(report: dict[str, Any], base_url: str | None = None) -> str:
     base = (base_url or get_settings().public_base_url).rstrip("/")
-    return f"{base}/reports/daily.pdf?date={quote(report['report_date'])}"
+    return f"{base}/reports/daily.pdf?date={quote(report['report_date'])}&v=published-status"
 
 
 def report_email_body(report: dict[str, Any]) -> str:

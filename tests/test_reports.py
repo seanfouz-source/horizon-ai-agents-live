@@ -123,7 +123,7 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
     assert flattened["subject"] == "Horizon Wireless AI Marketing Report - 2026-05-29"
     assert flattened["email_body"].startswith("Attached is the Horizon Wireless AI Marketing Report")
     assert "- Published posts: 1" in flattened["email_body"]
-    assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29")
+    assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29&v=published-status")
     assert flattened["attachment_filename"] == "horizon-ai-marketing-report-2026-05-29.pdf"
     assert flattened["published_posts"] == 1
     assert flattened["clicks"] == 5
