@@ -97,6 +97,7 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
         "totals": {
             "scheduled_posts": 1,
             "analytics_posts": 1,
+            "published_posts": 1,
             "pending_posts": 0,
             "failed_posts": 0,
             "impressions": 100,
@@ -106,7 +107,7 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
             "engagement_rate": 12.5,
         },
         "platforms": [
-            {"platform": "facebook", "posts": 1, "impressions": 100, "reach": 80, "clicks": 5, "engagement_actions": 10, "engagement_rate": 12.5, "pending_posts": 0, "failed_posts": 0},
+            {"platform": "facebook", "posts": 1, "published_posts": 1, "impressions": 100, "reach": 80, "clicks": 5, "engagement_actions": 10, "engagement_rate": 12.5, "pending_posts": 0, "failed_posts": 0},
         ],
         "top_posts": [{"platform": "facebook", "impressions": 100, "clicks": 5, "engagement_actions": 10, "text": "Shop phones"}],
         "failures": [],
@@ -117,10 +118,14 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
     flattened = flatten_report_for_zapier(report)
 
     assert "Horizon Wireless AI Marketing Report" in markdown
+    assert "- Published posts: 1" in markdown
+    assert "| Platform | Published | Analytics Posts |" in markdown
     assert flattened["subject"] == "Horizon Wireless AI Marketing Report - 2026-05-29"
     assert flattened["email_body"].startswith("Attached is the Horizon Wireless AI Marketing Report")
+    assert "- Published posts: 1" in flattened["email_body"]
     assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29")
     assert flattened["attachment_filename"] == "horizon-ai-marketing-report-2026-05-29.pdf"
+    assert flattened["published_posts"] == 1
     assert flattened["clicks"] == 5
     assert flattened["best_platform"] == "facebook"
 

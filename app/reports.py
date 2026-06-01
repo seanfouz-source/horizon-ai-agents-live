@@ -79,10 +79,11 @@ def format_daily_report_markdown(report: dict[str, Any]) -> str:
         "",
         "## Summary",
         "",
-        f"- Scheduled/published posts tracked: {totals['scheduled_posts']}",
-        f"- Published analytics posts: {totals['analytics_posts']}",
+        f"- Platform posts tracked: {totals['scheduled_posts']}",
+        f"- Published posts: {totals['published_posts']}",
         f"- Pending posts: {totals['pending_posts']}",
         f"- Failed posts: {totals['failed_posts']}",
+        f"- Analytics posts returned: {totals['analytics_posts']}",
         f"- Impressions/views: {totals['impressions']}",
         f"- Reach: {totals['reach']}",
         f"- eBay click proxy: {totals['clicks']}",
@@ -91,12 +92,12 @@ def format_daily_report_markdown(report: dict[str, Any]) -> str:
         "",
         "## Platform Performance",
         "",
-        "| Platform | Posts | Impressions/Views | Reach | Clicks | Engagement | Engagement Rate | Pending | Failed |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Platform | Published | Analytics Posts | Impressions/Views | Reach | Clicks | Engagement | Engagement Rate | Pending | Failed |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["platforms"]:
         lines.append(
-            "| {platform} | {posts} | {impressions} | {reach} | {clicks} | {engagement_actions} | {engagement_rate}% | {pending_posts} | {failed_posts} |".format(
+            "| {platform} | {published_posts} | {posts} | {impressions} | {reach} | {clicks} | {engagement_actions} | {engagement_rate}% | {pending_posts} | {failed_posts} |".format(
                 **row
             )
         )
@@ -109,7 +110,7 @@ def format_daily_report_markdown(report: dict[str, Any]) -> str:
                 f"{post['engagement_actions']} engagement actions - {post['text']}"
             )
     else:
-        lines.append("- No published post analytics returned for this date yet.")
+        lines.append("- No engagement analytics returned for published posts yet.")
 
     lines.extend(["", "## Watch List", ""])
     if report["failures"]:
@@ -199,11 +200,12 @@ def format_daily_report_pdf(report: dict[str, Any]) -> bytes:
     story.append(_pdf_table(summary_rows, [1.55 * inch, 1.1 * inch, 1.45 * inch, 1.1 * inch]))
 
     story.append(Paragraph("Platform Performance", section_style))
-    platform_rows = [["Platform", "Posts", "Views", "Reach", "Clicks", "Engage", "Pending", "Failed"]]
+    platform_rows = [["Platform", "Published", "Analytics", "Views", "Reach", "Clicks", "Engage", "Pending", "Failed"]]
     for row in report["platforms"]:
         platform_rows.append(
             [
                 row["platform"].title(),
+                row["published_posts"],
                 row["posts"],
                 row["impressions"],
                 row["reach"],
@@ -213,7 +215,13 @@ def format_daily_report_pdf(report: dict[str, Any]) -> bytes:
                 row["failed_posts"],
             ]
         )
-    story.append(_pdf_table(platform_rows, [1.05 * inch, 0.55 * inch, 0.7 * inch, 0.7 * inch, 0.6 * inch, 0.7 * inch, 0.7 * inch, 0.6 * inch], header=True))
+    story.append(
+        _pdf_table(
+            platform_rows,
+            [0.95 * inch, 0.65 * inch, 0.65 * inch, 0.6 * inch, 0.6 * inch, 0.55 * inch, 0.6 * inch, 0.6 * inch, 0.55 * inch],
+            header=True,
+        )
+    )
 
     story.append(Paragraph("Top Posts", section_style))
     if report["top_posts"]:
@@ -275,9 +283,10 @@ def report_email_body(report: dict[str, Any]) -> str:
         f"Attached is the Horizon Wireless AI Marketing Report for {report['report_date']}.\n\n"
         "Quick snapshot:\n"
         f"- Posts tracked: {totals['scheduled_posts']}\n"
-        f"- Published analytics posts: {totals['analytics_posts']}\n"
+        f"- Published posts: {totals['published_posts']}\n"
         f"- Pending posts: {totals['pending_posts']}\n"
         f"- Failed posts: {totals['failed_posts']}\n"
+        f"- Analytics posts returned: {totals['analytics_posts']}\n"
         f"- Impressions/views: {totals['impressions']}\n"
         f"- eBay click proxy: {totals['clicks']}"
         f"{best_line}\n\n"
@@ -298,6 +307,7 @@ def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = Non
         "attachment_filename": report_attachment_filename(report),
         "brand_name": report["brand"]["label"],
         "scheduled_posts": totals["scheduled_posts"],
+        "published_posts": totals["published_posts"],
         "analytics_posts": totals["analytics_posts"],
         "pending_posts": totals["pending_posts"],
         "failed_posts": totals["failed_posts"],
@@ -308,7 +318,8 @@ def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = Non
         "engagement_rate": totals["engagement_rate"],
         "best_platform": best_platform["platform"] if best_platform else "",
         "platform_rows": "\n".join(
-            f"{row['platform']}: {row['impressions']} impressions/views, {row['clicks']} clicks, "
+            f"{row['platform']}: {row['published_posts']} published, {row['posts']} analytics posts, "
+            f"{row['impressions']} impressions/views, {row['clicks']} clicks, "
             f"{row['engagement_actions']} engagements, {row['pending_posts']} pending, {row['failed_posts']} failed"
             for row in report["platforms"]
         ),
