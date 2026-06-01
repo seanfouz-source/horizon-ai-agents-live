@@ -164,3 +164,30 @@ def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):
     )
 
     assert [post.product_sku for post in batch.posts] == ["EBAY-1"]
+
+
+def test_all_phones_query_looks_past_non_phone_first_items(monkeypatch):
+    items = [
+        InventoryItem(sku="HZ-DEMO-001", title="Demo Vintage Camera Lens", quantity=1),
+        InventoryItem(sku="EBAY-1", title="Apple iPhone 14 Pro Max", quantity=1),
+        InventoryItem(sku="EBAY-2", title="Samsung Galaxy S25", quantity=1),
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: [f"2026-05-29 {hour:02d}:00:00" for hour in range(8, 8 + count)],
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(
+                promote_all_inventory=True,
+                query="all phones",
+                max_products_per_run=2,
+                brand_name="Horizon Wireless",
+            )
+        )
+    )
+
+    assert [post.product_sku for post in batch.posts] == ["EBAY-1", "EBAY-2"]

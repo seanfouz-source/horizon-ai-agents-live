@@ -580,11 +580,12 @@ def _inventory_items_for_daily_promotion(repository: InventoryRepository, reques
         return [item] if item and item.quantity > 0 else []
     query = request.query.strip().lower() if request.query else ""
     if query in {"all phones", "phones"}:
+        phone_candidate_limit = max(request.max_products_per_run * 4, request.max_products_per_run + 10)
         return [
             item
-            for item in repository.all_promotable(limit=request.max_products_per_run)
+            for item in repository.all_promotable(limit=phone_candidate_limit)
             if _looks_like_phone(item)
-        ]
+        ][: request.max_products_per_run]
     if query and query not in {"all", "all inventory", "daily inventory"}:
         return repository.search(request.query, limit=request.max_products_per_run)
     return repository.all_promotable(limit=request.max_products_per_run)
