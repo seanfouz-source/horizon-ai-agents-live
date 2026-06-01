@@ -397,9 +397,10 @@ def _slow_mover_items_for_outreach(
     if not items:
         query = request.query.strip().lower() if request.query else ""
         if query in {"all phones", "phones"}:
+            phone_candidate_limit = max(request.max_items * 4, request.max_items + 10)
             items = [
                 item
-                for item in repository.all_promotable(limit=request.max_items)
+                for item in repository.all_promotable(limit=phone_candidate_limit)
                 if _looks_like_phone(item)
             ]
         elif query and query not in {"all", "all inventory", "daily inventory"}:

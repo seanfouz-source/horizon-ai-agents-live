@@ -120,3 +120,33 @@ def test_zapier_slow_mover_response_adds_loop_fields(monkeypatch):
     assert response["comment_keyword_items"] == ["LINK891578"]
     assert response["metricool_comment_keyword_items"] == ["LINK891578"]
     assert response["manychat_reply_items"][0].endswith("https://www.ebay.com/itm/366419891578")
+
+
+def test_slow_mover_all_phones_looks_past_non_phone_first_item(monkeypatch):
+    items = [
+        InventoryItem(
+            sku="EBAY-WATCH",
+            title="Apple Watch Series 11 GPS Cellular Open Box",
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/watch",
+        ),
+        InventoryItem(
+            sku="EBAY-PHONE",
+            title="Samsung Galaxy Note20 Ultra 5G White Open Box",
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/phone",
+        ),
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: ["2026-06-01 08:00:00"] * count,
+    )
+
+    plan = agents_module.create_slow_mover_outreach(
+        SlowMoverOutreachRequest(max_items=1, angles_per_item=1, as_draft=True, auto_publish=False)
+    )
+
+    assert [draft.sku for draft in plan.drafts] == ["EBAY-PHONE"]
+    assert len(plan.metricool_payloads) == 1
