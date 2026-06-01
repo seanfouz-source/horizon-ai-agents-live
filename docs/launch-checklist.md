@@ -76,9 +76,12 @@ Use the body in [manychat-payloads.md](./manychat-payloads.md).
 Create two Zaps:
 
 - Customer replies: incoming Manychat or Metricool message to `/webhooks/zapier/customer-question`
-- Social posts: schedule/manual trigger to `/webhooks/zapier/social-drafts`, then Metricool Schedule Post
+- Social posts: Schedule by Zapier every day or manual trigger to `/webhooks/zapier/social-drafts`, then Metricool Schedule Post
+- Slow movers: weekly or manual trigger to `/webhooks/zapier/slow-mover-outreach`, then Looping by Zapier and Metricool Schedule Post
 
 Use the field map in [zapier-metricool-map.md](./zapier-metricool-map.md).
+Use [slow-mover-outreach.md](./slow-mover-outreach.md) for stale eBay listing
+engagement posts and ManyChat comment keywords.
 
 ## 6. Connect Metricool
 
@@ -121,8 +124,11 @@ The app serves the videos at `/media/campaigns/wholesale.mp4` and
 links instead of local files.
 
 For daily inventory coverage, the Zap must loop over the returned
-`metricool_*_items` arrays. The flat `metricool_*` fields are only the first
-post and are useful for testing one item.
+`metricool_*_items` arrays, plus `publicationDate_items` and `draft_items` for
+Metricool's required fields. The flat `metricool_*` fields are only the first
+post and are useful for testing one item. Make sure the Schedule by Zapier
+trigger is set to every day, not weekdays only, so weekend eBay posts are
+created too.
 
 Facebook Groups are only safe to automate when the group and scheduler support
 the destination directly. If the Metricool Zap action does not show a group

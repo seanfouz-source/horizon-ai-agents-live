@@ -16,6 +16,10 @@ from app.models import (
     GroupReplyDraft,
     GroupReplyRequest,
     InventoryItem,
+    SlowMoverMetric,
+    SlowMoverOutreachDraft,
+    SlowMoverOutreachPlan,
+    SlowMoverOutreachRequest,
     SocialDraftBatch,
     SocialDraftPlan,
     SocialDraftRequest,
@@ -301,12 +305,233 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
     if campaign_media_url:
         for post in batch.posts:
             post.media_url = campaign_media_url
-    if batch.posts and not request.publish_after:
-        default_schedule = default_metricool_publication_times(len(batch.posts))
+    if batch.posts:
+        default_schedule = default_metricool_publication_times(len(batch.posts), start_at=request.publish_after)
         for post, publication_time in zip(batch.posts, default_schedule, strict=False):
             post.suggested_schedule = publication_time
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     return batch
+
+
+def create_slow_mover_outreach(request: SlowMoverOutreachRequest) -> SlowMoverOutreachPlan:
+    repository = get_repository()
+    items = _slow_mover_items_for_outreach(repository, request)
+    if not items:
+        return SlowMoverOutreachPlan(
+            campaign_name="Slow-mover social outreach",
+            notes="No in-stock inventory items matched the slow-mover outreach request.",
+        )
+
+    metrics_by_sku = {metric.sku: metric for metric in request.slow_mover_metrics}
+    drafts: list[SlowMoverOutreachDraft] = []
+    posts: list[SocialPost] = []
+    for item in items:
+        metric = metrics_by_sku.get(item.sku)
+        score, reason = _slow_mover_priority(item, metric)
+        keyword = _comment_keyword_for_item(item)
+        item_posts = _slow_mover_posts_for_item(item, request, keyword)
+        drafts.append(
+            SlowMoverOutreachDraft(
+                sku=item.sku,
+                title=item.title,
+                ebay_url=_buy_url_for_item(item),
+                priority_score=score,
+                reason=reason,
+                comment_keyword=keyword,
+                manychat_reply=_slow_mover_manychat_reply(item),
+                outreach_posts=item_posts,
+                manual_outreach_notes=(
+                    "Use this for public posts and replies to inbound comments only. "
+                    "Do not cold-DM group members; review group rules before posting in groups."
+                ),
+            )
+        )
+        posts.extend(item_posts)
+
+    schedule = default_metricool_publication_times(len(posts), start_at=request.publish_after)
+    for post, publication_time in zip(posts, schedule, strict=False):
+        post.suggested_schedule = publication_time
+
+    social_request = SocialDraftRequest(
+        brand_name=request.brand_name,
+        platforms=request.platforms,
+        promote_all_inventory=request.cross_post_to_all_platforms,
+        cross_post_to_all_platforms=request.cross_post_to_all_platforms,
+        publish_after=request.publish_after,
+        as_draft=request.as_draft,
+        auto_publish=request.auto_publish,
+    )
+    metricool_payloads = [metricool_payload(post, social_request) for post in posts]
+    for payload, post in zip(metricool_payloads, posts, strict=False):
+        payload["comment_keyword"] = _comment_keyword_for_sku(post.product_sku)
+        payload["manychat_reply"] = _slow_mover_manychat_reply_from_post(post)
+
+    return SlowMoverOutreachPlan(
+        campaign_name="Slow-mover social outreach",
+        drafts=drafts,
+        posts=posts,
+        metricool_payloads=metricool_payloads,
+        manychat_keywords=[draft.comment_keyword for draft in drafts],
+        notes=(
+            f"Generated {len(posts)} engagement-focused outreach posts for {len(drafts)} slow-moving items. "
+            "Use Looping by Zapier over metricool_payloads to schedule every post, and connect the comment keywords to ManyChat replies."
+        ),
+    )
+
+
+def _slow_mover_items_for_outreach(
+    repository: InventoryRepository,
+    request: SlowMoverOutreachRequest,
+) -> list[InventoryItem]:
+    metrics_by_sku = {metric.sku: metric for metric in request.slow_mover_metrics}
+    requested_skus = [*request.skus, *metrics_by_sku.keys()]
+    items: list[InventoryItem] = []
+    seen_skus: set[str] = set()
+
+    for sku in requested_skus:
+        item = repository.get(sku)
+        if item and item.quantity > 0 and item.sku not in seen_skus:
+            items.append(item)
+            seen_skus.add(item.sku)
+
+    if not items:
+        query = request.query.strip().lower() if request.query else ""
+        if query in {"all phones", "phones"}:
+            items = [
+                item
+                for item in repository.all_promotable(limit=request.max_items)
+                if _looks_like_phone(item)
+            ]
+        elif query and query not in {"all", "all inventory", "daily inventory"}:
+            items = repository.search(request.query, limit=request.max_items)
+        else:
+            items = repository.all_promotable(limit=request.max_items)
+
+    return sorted(
+        items,
+        key=lambda item: _slow_mover_priority(item, metrics_by_sku.get(item.sku))[0],
+        reverse=True,
+    )[: request.max_items]
+
+
+def _slow_mover_priority(item: InventoryItem, metric: SlowMoverMetric | None) -> tuple[int, str]:
+    if not metric:
+        return (
+            45,
+            "Fallback slow-mover candidate from in-stock inventory; pass eBay views, watchers, and sales metrics for sharper ranking.",
+        )
+
+    score = 40
+    reasons: list[str] = []
+    age_days = metric.days_since_sale if metric.days_since_sale is not None else metric.listing_age_days
+    if age_days is not None:
+        score += min(age_days, 45)
+        reasons.append(f"{age_days} days without a sale or listing movement")
+    if metric.views is not None and metric.views <= 25:
+        score += 15
+        reasons.append(f"low views ({metric.views})")
+    if metric.watchers is not None and metric.watchers <= 1:
+        score += 10
+        reasons.append(f"low watchers ({metric.watchers})")
+    if metric.quantity_sold == 0:
+        score += 10
+        reasons.append("no recorded sales")
+    if item.quantity > 1:
+        score += min(item.quantity, 10)
+        reasons.append(f"{item.quantity} units still in stock")
+    if metric.notes:
+        reasons.append(metric.notes)
+    return min(score, 100), "; ".join(reasons) or "Slow-mover metrics supplied by Zapier."
+
+
+def _slow_mover_posts_for_item(
+    item: InventoryItem,
+    request: SlowMoverOutreachRequest,
+    keyword: str,
+) -> list[SocialPost]:
+    angle_names = ("question", "use_case", "comparison")[: request.angles_per_item]
+    posts: list[SocialPost] = []
+    if request.cross_post_to_all_platforms:
+        platform = request.platforms[0] if request.platforms else "facebook"
+        for angle in angle_names:
+            posts.append(_slow_mover_social_post(item, request, platform, keyword, angle))
+        return posts
+
+    for angle in angle_names:
+        for platform in request.platforms:
+            posts.append(_slow_mover_social_post(item, request, platform, keyword, angle))
+    return posts
+
+
+def _slow_mover_social_post(
+    item: InventoryItem,
+    request: SlowMoverOutreachRequest,
+    platform: str,
+    keyword: str,
+    angle: str,
+) -> SocialPost:
+    return SocialPost(
+        platform=cast(SocialPlatform, platform),
+        text=_slow_mover_post_text(item, request, platform, keyword, angle),
+        product_sku=item.sku,
+        product_title=item.title,
+        ebay_url=_buy_url_for_item(item),
+        media_url=item.image_url,
+        hashtags=_hashtags_for_item(item),
+        post_type="engagement",
+    )
+
+
+def _slow_mover_post_text(
+    item: InventoryItem,
+    request: SlowMoverOutreachRequest,
+    platform: str,
+    keyword: str,
+    angle: str,
+) -> str:
+    brand = request.brand_name
+    title = item.title.strip()
+    price = _price_text(item)
+    condition = f" Condition: {item.condition}." if item.condition else ""
+    url = _buy_url_for_item(item)
+    link_line = f"Comment {keyword} for the eBay link, or buy now: {url}"
+
+    if angle == "use_case":
+        lead = f"{brand} practical pick: {title}.{price}{condition}"
+        hook = "Good fit for a backup phone, reseller shelf, repair-shop customer, or everyday replacement."
+    elif angle == "comparison":
+        lead = f"Quick comparison check from {brand}: {title}.{price}{condition}"
+        hook = "Would you choose this model for value, storage, condition, or unlocked compatibility?"
+    else:
+        lead = f"{brand} slow-mover spotlight: {title}.{price}{condition}"
+        hook = "Who is looking for a clean phone option without paying full flagship retail?"
+
+    if platform == "tiktok":
+        hook = "Worth a closer look for shoppers comparing phone value."
+    elif platform == "linkedin":
+        hook = "Useful for resellers, repair shops, and teams sourcing reliable device inventory."
+
+    return f"{lead}\n{hook}\n{link_line}"
+
+
+def _comment_keyword_for_item(item: InventoryItem) -> str:
+    return _comment_keyword_for_sku(item.sku)
+
+
+def _comment_keyword_for_sku(sku: str | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", sku or "").upper()
+    suffix = cleaned[-6:] if cleaned else "PHONE"
+    return f"LINK{suffix}"
+
+
+def _slow_mover_manychat_reply(item: InventoryItem) -> str:
+    return f"Here is the eBay link for {item.title}: {_buy_url_for_item(item)}"
+
+
+def _slow_mover_manychat_reply_from_post(post: SocialPost) -> str:
+    title = post.product_title or "that Horizon Wireless listing"
+    url = post.ebay_url or get_settings().ebay_store_url
+    return f"Here is the eBay link for {title}: {url}"
 
 
 def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
@@ -332,10 +557,9 @@ def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDr
             for platform in request.platforms:
                 posts.append(_inventory_social_post(item, request, platform=platform, media_url=campaign_media_url))
 
-    if not request.publish_after:
-        default_schedule = default_metricool_publication_times(len(posts))
-        for post, publication_time in zip(posts, default_schedule, strict=False):
-            post.suggested_schedule = publication_time
+    default_schedule = default_metricool_publication_times(len(posts), start_at=request.publish_after)
+    for post, publication_time in zip(posts, default_schedule, strict=False):
+        post.suggested_schedule = publication_time
 
     batch = SocialDraftBatch(
         campaign_name="Daily all-inventory promotion",

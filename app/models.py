@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -109,6 +110,69 @@ class SocialDraftBatch(BaseModel):
     campaign_name: str
     posts: list[SocialPost]
     metricool_payloads: list[dict[str, object]] = Field(default_factory=list)
+    notes: str = ""
+
+
+class SlowMoverMetric(BaseModel):
+    sku: str
+    listing_age_days: int | None = Field(default=None, ge=0)
+    days_since_sale: int | None = Field(default=None, ge=0)
+    views: int | None = Field(default=None, ge=0)
+    watchers: int | None = Field(default=None, ge=0)
+    quantity_sold: int | None = Field(default=None, ge=0)
+    notes: str | None = None
+
+
+class SlowMoverOutreachRequest(BaseModel):
+    query: str | None = "all phones"
+    skus: list[str] = Field(default_factory=list)
+    slow_mover_metrics: list[SlowMoverMetric] = Field(default_factory=list)
+    max_items: int = Field(default=5, ge=1, le=25)
+    angles_per_item: int = Field(default=2, ge=1, le=3)
+    brand_name: str = "Horizon Wireless"
+    platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok", "linkedin"])
+    cross_post_to_all_platforms: bool = True
+    publish_after: str | None = None
+    as_draft: bool = True
+    auto_publish: bool = False
+
+    @field_validator("platforms", "skus", mode="before")
+    @classmethod
+    def normalize_zapier_lists(cls, value: object) -> object:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return _split_zapier_list(value)
+        return value
+
+    @field_validator("slow_mover_metrics", mode="before")
+    @classmethod
+    def normalize_slow_mover_metrics(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return json.loads(value)
+        return value
+
+
+class SlowMoverOutreachDraft(BaseModel):
+    sku: str
+    title: str
+    ebay_url: str
+    priority_score: int
+    reason: str
+    comment_keyword: str
+    manychat_reply: str
+    outreach_posts: list[SocialPost] = Field(default_factory=list)
+    manual_outreach_notes: str
+
+
+class SlowMoverOutreachPlan(BaseModel):
+    campaign_name: str
+    drafts: list[SlowMoverOutreachDraft] = Field(default_factory=list)
+    posts: list[SocialPost] = Field(default_factory=list)
+    metricool_payloads: list[dict[str, object]] = Field(default_factory=list)
+    manychat_keywords: list[str] = Field(default_factory=list)
     notes: str = ""
 
 

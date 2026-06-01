@@ -53,7 +53,7 @@ Use the response field named `reply` as the message text in the next Manychat or
 Trigger options:
 
 - Manual Zapier trigger
-- Schedule by Zapier
+- Schedule by Zapier, set to every day so Saturday and Sunday are included
 - New row in a spreadsheet
 - New item imported to inventory
 
@@ -116,6 +116,12 @@ in Central time: 07:30, 09:00, 10:30, 12:00, 13:30, 15:00, 16:30, 18:00,
 19:30, 21:00, and 22:30. If more posts are generated than slots left today,
 the schedule continues on the next day.
 
+When `publish_after` is provided, treat it as the earliest start time, not as a
+single publication time for every eBay listing. The app still spreads the
+returned posts across the daily slots and continues through weekends. In
+Zapier, do not map the trigger timestamp directly into every Metricool loop
+item; map each loop item's `publicationDate_items` value instead.
+
 Response fields:
 
 ```text
@@ -127,15 +133,20 @@ metricool_instagram_items
 metricool_tiktok_items
 metricool_linkedin_items
 metricool_publication_date_time_items
+publicationDate_items
 metricool_post_content_items
 metricool_media_01_items
 metricool_as_draft_items
+draft_items
 metricool_auto_publish_items
 metricool_product_sku_items
+metricool_product_title_items
 metricool_ebay_url_items
 metricool_buy_url_items
 metricool_link_url_items
 metricool_facebook_link_url_items
+metricool_comment_keyword_items
+metricool_manychat_reply_items
 metricool_publication_date_time
 metricool_post_content
 metricool_facebook
@@ -145,20 +156,28 @@ metricool_linkedin
 metricool_media_01
 metricool_publish_to_facebook_groups
 metricool_facebook_groups
+metricool_product_sku
+metricool_product_title
 metricool_ebay_url
 metricool_buy_url
 metricool_link_url
 metricool_facebook_link_url
 metricool_as_draft
+publicationDate
+draft
 metricool_auto_publish
 metricool_post_type
+metricool_comment_keyword
+metricool_manychat_reply
 ```
 
 Each item in `metricool_payloads` maps to one Metricool `Schedule Post` action,
 but the most reliable Zapier setup is to add `Looping by Zapier` after this
-webhook and loop over the `metricool_*_items` arrays. The flat `metricool_*`
-fields intentionally contain only the first post for quick single-product tests;
-using only those flat fields will schedule only one item.
+webhook and loop over the `metricool_*_items` arrays, plus
+`publicationDate_items` and `draft_items` for Metricool's required internal
+fields. The flat `metricool_*` fields intentionally contain only the first post
+for quick single-product tests; using only those flat fields will schedule only
+one item.
 
 ## Metricool Schedule Post Mapping
 
@@ -177,6 +196,31 @@ Link URL / URL, if available -> metricool_link_url
 As draft -> metricool_as_draft
 Auto publish -> metricool_auto_publish
 Post type -> POST
+```
+
+If Zapier shows Metricool's internal required field names instead of the
+friendly labels, use these aliases:
+
+```text
+Publication Date/Time (publicationDate) -> publicationDate
+As draft (draft) -> draft
+```
+
+For daily eBay inventory coverage, add `Looping by Zapier` before the Metricool
+action and map the Metricool action from the current loop values:
+
+```text
+Facebook -> metricool_facebook_items
+Instagram -> metricool_instagram_items
+Tiktok -> metricool_tiktok_items
+LinkedIn -> metricool_linkedin_items
+Publication Date/Time (publicationDate) -> publicationDate_items
+Post content / Text -> metricool_post_content_items
+Media 01 -> metricool_media_01_items
+Link URL / URL, if available -> metricool_link_url_items
+As draft (draft) -> draft_items
+Auto publish -> metricool_auto_publish_items
+Post type -> metricool_post_type_items
 ```
 
 For Facebook eBay product posts, keep the eBay URL in the caption and map any
@@ -199,9 +243,9 @@ automation works on Page posts, not Facebook Group posts.
 Optional tracking fields:
 
 ```text
-Product SKU -> product_sku
-Product Title -> product_title
-eBay URL -> ebay_url
+Product SKU -> metricool_product_sku or metricool_product_sku_items
+Product Title -> metricool_product_title or metricool_product_title_items
+eBay URL -> metricool_ebay_url or metricool_ebay_url_items
 ```
 
 Review-first mode:

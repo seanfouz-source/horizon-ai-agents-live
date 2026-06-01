@@ -15,6 +15,7 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 - [Launch checklist](docs/launch-checklist.md)
 - [Manychat payloads](docs/manychat-payloads.md)
 - [Zapier and Metricool field map](docs/zapier-metricool-map.md)
+- [Slow-mover social outreach](docs/slow-mover-outreach.md)
 
 ## Local Setup
 
@@ -54,6 +55,7 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 - `POST /webhooks/manychat` answers Manychat Dynamic Block or External Request calls.
 - `POST /webhooks/zapier/customer-question` returns a JSON answer for Zapier.
 - `POST /webhooks/zapier/social-drafts` creates Facebook, Instagram, and TikTok post drafts.
+- `POST /webhooks/zapier/slow-mover-outreach` creates engagement-first posts for stale eBay items.
 - `POST /webhooks/metricool/inbox` answers Metricool inbox/comment events routed through Zapier.
 - `GET /reports/daily` returns a daily Metricool effectiveness report.
 - `GET /reports/daily.md` returns the same report as email-ready Markdown.
@@ -91,9 +93,15 @@ For product Q&A:
 
 For advertising posts:
 
-1. Trigger: Schedule, new eBay listing, or manual webhook.
+1. Trigger: Schedule by Zapier every day, new eBay listing, or manual webhook.
 2. Action: POST a request to `/webhooks/zapier/social-drafts`.
-3. Action: Use Looping by Zapier over the returned `metricool_*_items` fields, then map each loop item into Metricool's `Schedule Post` action.
+3. Action: Use Looping by Zapier over the returned `metricool_*_items` fields, plus `publicationDate_items` and `draft_items`, then map each loop item into Metricool's `Schedule Post` action.
+
+For stale eBay listings:
+
+1. Trigger: Schedule by Zapier, a slow-mover report, or a manual webhook.
+2. Action: POST slow item metrics to `/webhooks/zapier/slow-mover-outreach`.
+3. Action: Loop over the returned Metricool fields for outreach posts, and connect `comment_keyword_items` to ManyChat keyword replies.
 
 For daily reporting:
 
@@ -119,9 +127,13 @@ Example social draft request:
 When `promote_all_inventory` is true, the app creates one Metricool payload per
 in-stock listing. By default each payload cross-posts to every requested
 platform, so 18 in-stock phones produce 18 scheduled Metricool posts instead of
-only the first phone. Product captions end with a visible `Buy on eBay:` line,
+only the first phone. The app staggers those posts across the daily schedule,
+including Saturday and Sunday. Product captions end with a visible `Buy on eBay:` line,
 and the Zapier response also includes `metricool_link_url` fields for Metricool
-link/URL mappings when that field is available.
+link/URL mappings when that field is available. For Metricool's required
+`Publication Date/Time` and `As draft` fields, the response includes both the
+readable `metricool_publication_date_time` / `metricool_as_draft` fields and
+Zapier's internal `publicationDate` / `draft` aliases.
 
 ## eBay Inventory
 

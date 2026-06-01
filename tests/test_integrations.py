@@ -72,6 +72,7 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
 
     assert response["metricool_publication_date_time"] == "2026-05-25 05:46:21"
     assert response["publicationDate"] == "2026-05-25 05:46:21"
+    assert response["draft"] is True
     assert response["metricool_post_content"] == "Shop this ExactSpec listing."
     assert response["metricool_facebook"] is True
     assert response["metricool_instagram"] is False
@@ -95,6 +96,13 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
         "2026-05-25 05:46:21",
         "2026-05-25 05:46:21",
     ]
+    assert response["publicationDate_items"] == [
+        "2026-05-25 05:46:21",
+        "2026-05-25 05:46:21",
+        "2026-05-25 05:46:21",
+        "2026-05-25 05:46:21",
+    ]
+    assert response["draft_items"] == [True, True, True, True]
     assert response["metricool_ebay_url_items"][0] == "https://www.ebay.com/itm/1"
     assert response["metricool_buy_url_items"][0] == "https://www.ebay.com/itm/1"
     assert response["metricool_link_url_items"][0] == "https://www.ebay.com/itm/1"
@@ -239,6 +247,8 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
     assert payload["instagram"] is True
     assert payload["tiktok"] is True
     assert payload["linkedin"] is True
+    assert payload["publicationDate"] == payload["publication_date_time"]
+    assert payload["draft"] is False
     assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
     assert payload["buy_url"] == "https://www.ebay.com/itm/123"
     assert payload["link_url"] == "https://www.ebay.com/itm/123"
@@ -324,6 +334,28 @@ def test_default_metricool_publication_time_uses_evening_and_weekend_slots():
     now = datetime(2026, 5, 29, 17, 30, tzinfo=central)
 
     assert default_metricool_publication_time(now) == "2026-05-29 18:00:00"
+
+
+def test_default_metricool_publication_times_continue_into_saturday():
+    central = ZoneInfo("America/Chicago")
+    now = datetime(2026, 5, 29, 22, 45, tzinfo=central)
+
+    assert default_metricool_publication_times(3, now) == [
+        "2026-05-30 07:30:00",
+        "2026-05-30 09:00:00",
+        "2026-05-30 10:30:00",
+    ]
+
+
+def test_default_metricool_publication_times_can_start_on_sunday():
+    central = ZoneInfo("America/Chicago")
+    now = datetime(2026, 5, 29, 9, 0, tzinfo=central)
+
+    assert default_metricool_publication_times(3, now, start_at="2026-05-31 08:00:00") == [
+        "2026-05-31 09:00:00",
+        "2026-05-31 10:30:00",
+        "2026-05-31 12:00:00",
+    ]
 
 
 def test_default_metricool_publication_times_stagger_across_the_day():

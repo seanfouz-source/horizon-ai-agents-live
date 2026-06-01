@@ -1,6 +1,9 @@
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import app.agents as agents_module
+from app.integrations import default_metricool_publication_times
 from app.models import InventoryItem, SocialDraftRequest
 
 
@@ -42,7 +45,7 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
     monkeypatch.setattr(
         agents_module,
         "default_metricool_publication_times",
-        lambda count: [f"2026-05-29 {hour:02d}:00:00" for hour in range(8, 8 + count)],
+        lambda count, start_at=None: [f"2026-05-29 {hour:02d}:00:00" for hour in range(8, 8 + count)],
     )
 
     batch = asyncio.run(
@@ -75,13 +78,63 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
         assert payload["facebook_link_url"] == payload["ebay_url"]
 
 
+def test_all_inventory_mode_staggers_from_publish_after(monkeypatch):
+    items = [
+        InventoryItem(
+            sku="EBAY-1",
+            title="Apple iPhone 14 Pro Max - Gold 128GB",
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/1",
+        ),
+        InventoryItem(
+            sku="EBAY-2",
+            title="Samsung Galaxy S25 - Blue 128GB",
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/2",
+        ),
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+    central = ZoneInfo("America/Chicago")
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: default_metricool_publication_times(
+            count,
+            now=datetime(2026, 5, 29, 9, 0, tzinfo=central),
+            start_at=start_at,
+        ),
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(
+                promote_all_inventory=True,
+                brand_name="Horizon Wireless",
+                platforms=["facebook"],
+                publish_after="2026-05-30 07:00:00",
+                as_draft=False,
+                auto_publish=True,
+            )
+        )
+    )
+
+    assert [payload["publication_date_time"] for payload in batch.metricool_payloads] == [
+        "2026-05-30 07:30:00",
+        "2026-05-30 09:00:00",
+    ]
+
+
 def test_all_inventory_mode_can_filter_by_query(monkeypatch):
     items = [
         InventoryItem(sku="EBAY-1", title="Apple iPhone 14 Pro Max", quantity=1),
         InventoryItem(sku="EBAY-2", title="Samsung Galaxy S25", quantity=1),
     ]
     monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
-    monkeypatch.setattr(agents_module, "default_metricool_publication_times", lambda count: ["2026-05-29 08:00:00"])
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: ["2026-05-29 08:00:00"],
+    )
 
     batch = asyncio.run(
         agents_module.create_social_drafts(
@@ -98,7 +151,11 @@ def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):
         InventoryItem(sku="HZ-DEMO-001", title="Demo Vintage Camera Lens", quantity=1),
     ]
     monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
-    monkeypatch.setattr(agents_module, "default_metricool_publication_times", lambda count: ["2026-05-29 08:00:00"])
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: ["2026-05-29 08:00:00"],
+    )
 
     batch = asyncio.run(
         agents_module.create_social_drafts(

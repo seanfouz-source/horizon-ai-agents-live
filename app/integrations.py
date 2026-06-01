@@ -90,9 +90,11 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         "publish_to_facebook_groups": request.publish_to_facebook_groups if facebook_enabled else None,
         "facebook_groups": facebook_groups,
         "publication_date_time": publication_date_time,
+        "publicationDate": publication_date_time,
         "post_content": post.text,
         "media_01": media_url,
         "as_draft": request.as_draft,
+        "draft": request.as_draft,
         "auto_publish": request.auto_publish,
         "post_type": "POST",
         "social_post_type": post.post_type,
@@ -135,6 +137,10 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         (payload.get("facebook_groups") for payload in batch.metricool_payloads if payload.get("facebook_groups")),
         None,
     )
+    publication_date_time = first_payload.get("publication_date_time") or first_payload.get("publicationDate")
+    as_draft = first_payload.get("as_draft")
+    if as_draft is None:
+        as_draft = first_payload.get("draft")
     flat_fields = {
         "metricool_brand_name": first_payload.get("brand_name"),
         "metricool_facebook": platform_flags["facebook"],
@@ -145,10 +151,10 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
             payload.get("publish_to_facebook_groups") for payload in batch.metricool_payloads
         ),
         "metricool_facebook_groups": _csv_value(facebook_groups),
-        "metricool_publication_date_time": first_payload.get("publication_date_time"),
+        "metricool_publication_date_time": publication_date_time,
         "metricool_post_content": first_payload.get("post_content"),
         "metricool_media_01": flat_media_url,
-        "metricool_as_draft": first_payload.get("as_draft"),
+        "metricool_as_draft": as_draft,
         "metricool_auto_publish": first_payload.get("auto_publish"),
         "metricool_post_type": first_payload.get("post_type"),
         "metricool_social_post_type": first_payload.get("social_post_type"),
@@ -158,7 +164,10 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "metricool_buy_url": first_payload.get("buy_url"),
         "metricool_link_url": first_payload.get("link_url"),
         "metricool_facebook_link_url": first_payload.get("facebook_link_url"),
-        "publicationDate": first_payload.get("publication_date_time"),
+        "metricool_comment_keyword": first_payload.get("comment_keyword"),
+        "metricool_manychat_reply": first_payload.get("manychat_reply"),
+        "publicationDate": publication_date_time,
+        "draft": as_draft,
     }
     response.update({key: value for key, value in flat_fields.items() if value is not None})
     response.update(_metricool_line_items(batch.metricool_payloads))
@@ -189,6 +198,8 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
         "buy_url",
         "link_url",
         "facebook_link_url",
+        "comment_keyword",
+        "manychat_reply",
     )
     line_items: dict[str, object] = {"metricool_payload_count": len(payloads)}
     for field in fields:
@@ -196,7 +207,14 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
             _csv_value(payload.get(field)) if field == "facebook_groups" else payload.get(field)
             for payload in payloads
         ]
-    line_items["publicationDate_items"] = [payload.get("publication_date_time") for payload in payloads]
+    line_items["publicationDate_items"] = [
+        payload.get("publication_date_time") or payload.get("publicationDate")
+        for payload in payloads
+    ]
+    line_items["draft_items"] = [
+        payload.get("as_draft") if payload.get("as_draft") is not None else payload.get("draft")
+        for payload in payloads
+    ]
     return line_items
 
 
@@ -251,7 +269,11 @@ def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str 
 
 
 def _metricool_publication_time(post: SocialPost, request: SocialDraftRequest) -> str:
-    return _valid_metricool_publication_time(post.suggested_schedule) or request.publish_after or default_metricool_publication_time()
+    return (
+        _valid_metricool_publication_time(post.suggested_schedule)
+        or _valid_metricool_publication_time(request.publish_after)
+        or default_metricool_publication_time()
+    )
 
 
 def _valid_metricool_publication_time(value: str | None) -> str | None:
@@ -269,7 +291,11 @@ def default_metricool_publication_time(now: datetime | None = None) -> str:
     return default_metricool_publication_times(1, now=now)[0]
 
 
-def default_metricool_publication_times(count: int, now: datetime | None = None) -> list[str]:
+def default_metricool_publication_times(
+    count: int,
+    now: datetime | None = None,
+    start_at: str | datetime | None = None,
+) -> list[str]:
     if count <= 0:
         return []
 
@@ -279,11 +305,16 @@ def default_metricool_publication_times(count: int, now: datetime | None = None)
 
     local_now = current_time.astimezone(POSTING_TIMEZONE)
     minimum_time = local_now + POSTING_MINIMUM_LEAD_TIME
+    schedule_start = _coerce_metricool_schedule_start(start_at)
+    if schedule_start and schedule_start > minimum_time:
+        minimum_time = schedule_start
+
     publication_times: list[str] = []
     day_offset = 0
+    start_date = minimum_time.date()
 
     while len(publication_times) < count:
-        candidate_date = local_now.date() + timedelta(days=day_offset)
+        candidate_date = start_date + timedelta(days=day_offset)
         for slot in DAILY_POSTING_SLOTS:
             candidate = datetime.combine(candidate_date, slot, tzinfo=POSTING_TIMEZONE)
             if candidate >= minimum_time:
@@ -293,3 +324,17 @@ def default_metricool_publication_times(count: int, now: datetime | None = None)
         day_offset += 1
 
     return publication_times
+
+
+def _coerce_metricool_schedule_start(value: str | datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        candidate = value
+        if candidate.tzinfo is None:
+            candidate = candidate.replace(tzinfo=POSTING_TIMEZONE)
+        return candidate.astimezone(POSTING_TIMEZONE)
+    publication_time = _valid_metricool_publication_time(value)
+    if not publication_time:
+        return None
+    return datetime.strptime(publication_time, METRICOOL_PUBLICATION_FORMAT).replace(tzinfo=POSTING_TIMEZONE)
