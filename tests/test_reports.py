@@ -9,6 +9,7 @@ from app.reports import (
     flatten_report_for_zapier,
     format_daily_report_markdown,
     format_daily_report_pdf,
+    report_email_body,
 )
 
 
@@ -123,11 +124,54 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
     assert flattened["subject"] == "Horizon Wireless AI Marketing Report - 2026-05-29"
     assert flattened["email_body"].startswith("Attached is the Horizon Wireless AI Marketing Report")
     assert "- Published posts: 1" in flattened["email_body"]
+    assert "Metricool platform analytics:" in flattened["email_body"]
+    assert "- Facebook: 1 published, 1 Metricool analytics posts, 100 impressions/views" in flattened["email_body"]
+    assert "Metricool top post analytics:" in flattened["email_body"]
+    assert "Shop phones" in flattened["email_body"]
     assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29&v=published-status")
     assert flattened["attachment_filename"] == "horizon-ai-marketing-report-2026-05-29.pdf"
     assert flattened["published_posts"] == 1
+    assert flattened["analytics_note"] == "Metricool returned 1 post-level analytics records with numeric metrics."
+    assert flattened["top_post_rows"].startswith("- Facebook: 100 impressions/views")
     assert flattened["clicks"] == 5
     assert flattened["best_platform"] == "facebook"
+
+
+def test_report_email_body_explains_metricool_records_without_numeric_metrics():
+    report = {
+        "report_date": "2026-06-04",
+        "timezone": "America/Chicago",
+        "brand": {"label": "Horizon Wireless", "blog_id": 6278196},
+        "totals": {
+            "scheduled_posts": 4,
+            "analytics_posts": 2,
+            "published_posts": 2,
+            "pending_posts": 2,
+            "failed_posts": 0,
+            "impressions": 0,
+            "reach": 0,
+            "clicks": 0,
+            "engagement_actions": 0,
+            "engagement_rate": 0.0,
+        },
+        "platforms": [
+            {"platform": "facebook", "posts": 0, "published_posts": 0, "impressions": 0, "reach": 0, "clicks": 0, "engagement_actions": 0, "engagement_rate": 0.0, "pending_posts": 1, "failed_posts": 0},
+            {"platform": "linkedin", "posts": 2, "published_posts": 2, "impressions": 0, "reach": 0, "clicks": 0, "engagement_actions": 0, "engagement_rate": 0.0, "pending_posts": 1, "failed_posts": 0},
+        ],
+        "top_posts": [
+            {"platform": "linkedin", "impressions": 0, "reach": 0, "clicks": 0, "engagement_actions": 0, "text": "Horizon Wireless listing update", "url": "https://linkedin.com/feed/update/1"},
+        ],
+        "failures": [],
+        "recommendations": ["Metricool returned post records, but numeric analytics are still pending."],
+    }
+
+    body = report_email_body(report)
+
+    assert "Metricool returned 2 post records, but numeric metrics are still 0/not available yet." in body
+    assert "- LinkedIn: 2 published, 2 Metricool analytics posts, 0 impressions/views" in body
+    assert "- LinkedIn: 0 impressions/views, 0 reach, 0 clicks, 0 engagements - Horizon Wireless listing update" in body
+    assert "URL: https://linkedin.com/feed/update/1" in body
+    assert "- No failed Metricool posts found for this report date." in body
 
 
 def test_daily_metricool_report_pdf_renders():

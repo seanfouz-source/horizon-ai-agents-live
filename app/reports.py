@@ -16,6 +16,12 @@ from app.config import Settings, get_settings
 REPORT_TIMEZONE = ZoneInfo("America/Chicago")
 METRICOOL_BASE_URL = "https://app.metricool.com/api"
 REPORT_PLATFORMS = ("facebook", "instagram", "tiktok", "linkedin")
+PLATFORM_LABELS = {
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+    "linkedin": "LinkedIn",
+}
 
 
 class MetricoolReportError(RuntimeError):
@@ -279,6 +285,10 @@ def report_email_body(report: dict[str, Any]) -> str:
     totals = report["totals"]
     best_platform = _best_platform(report)
     best_line = f"\nBest current platform: {best_platform['platform']}" if best_platform else ""
+    analytics_note = _metricool_analytics_note(report)
+    platform_rows = "\n".join(_email_platform_rows(report))
+    top_post_rows = "\n".join(_email_top_post_rows(report))
+    failure_rows = "\n".join(_email_failure_rows(report))
     return (
         f"Attached is the Horizon Wireless AI Marketing Report for {report['report_date']}.\n\n"
         "Quick snapshot:\n"
@@ -286,11 +296,21 @@ def report_email_body(report: dict[str, Any]) -> str:
         f"- Published posts: {totals['published_posts']}\n"
         f"- Pending posts: {totals['pending_posts']}\n"
         f"- Failed posts: {totals['failed_posts']}\n"
-        f"- Analytics posts returned: {totals['analytics_posts']}\n"
+        f"- Metricool analytics posts returned: {totals['analytics_posts']}\n"
         f"- Impressions/views: {totals['impressions']}\n"
-        f"- eBay click proxy: {totals['clicks']}"
+        f"- Reach: {totals['reach']}\n"
+        f"- eBay click proxy: {totals['clicks']}\n"
+        f"- Engagement actions: {totals['engagement_actions']}\n"
+        f"- Engagement rate: {totals['engagement_rate']}%"
         f"{best_line}\n\n"
-        "The attached PDF includes platform performance, top posts, failures to watch, and next recommendations."
+        f"{analytics_note}\n\n"
+        "Metricool platform analytics:\n"
+        f"{platform_rows}\n\n"
+        "Metricool top post analytics:\n"
+        f"{top_post_rows}\n\n"
+        "Watch list:\n"
+        f"{failure_rows}\n\n"
+        "The attached PDF includes the same analytics table, full watch list, and next recommendations."
     )
 
 
@@ -316,6 +336,7 @@ def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = Non
         "clicks": totals["clicks"],
         "engagement_actions": totals["engagement_actions"],
         "engagement_rate": totals["engagement_rate"],
+        "analytics_note": _metricool_analytics_note(report),
         "best_platform": best_platform["platform"] if best_platform else "",
         "platform_rows": "\n".join(
             f"{row['platform']}: {row['published_posts']} published, {row['posts']} analytics posts, "
@@ -323,6 +344,7 @@ def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = Non
             f"{row['engagement_actions']} engagements, {row['pending_posts']} pending, {row['failed_posts']} failed"
             for row in report["platforms"]
         ),
+        "top_post_rows": "\n".join(_email_top_post_rows(report)),
         "failures": "\n".join(
             f"{failure['platform']} post {failure['post_id']}: {failure['status']} - {failure['detail']}"
             for failure in report["failures"]
@@ -338,6 +360,77 @@ def _best_platform(report: dict[str, Any]) -> dict[str, Any] | None:
     ):
         return None
     return best_platform
+
+
+def _metricool_analytics_note(report: dict[str, Any]) -> str:
+    totals = report["totals"]
+    has_numeric_metrics = bool(
+        totals["impressions"] or totals["reach"] or totals["clicks"] or totals["engagement_actions"]
+    )
+    if totals["analytics_posts"] == 0:
+        return "Metricool returned no post-level analytics records yet for this date."
+    if has_numeric_metrics:
+        return f"Metricool returned {totals['analytics_posts']} post-level analytics records with numeric metrics."
+    return (
+        f"Metricool returned {totals['analytics_posts']} post records, but numeric metrics are still 0/not available yet. "
+        "Metricool analytics can lag after posts publish."
+    )
+
+
+def _email_platform_rows(report: dict[str, Any]) -> list[str]:
+    return [
+        (
+            f"- {_platform_label(row['platform'])}: {row['published_posts']} published, "
+            f"{row['posts']} Metricool analytics posts, {row['impressions']} impressions/views, "
+            f"{row['reach']} reach, {row['clicks']} clicks, {row['engagement_actions']} engagements, "
+            f"{row['pending_posts']} pending, {row['failed_posts']} failed"
+        )
+        for row in report["platforms"]
+    ]
+
+
+def _email_top_post_rows(report: dict[str, Any], limit: int = 5) -> list[str]:
+    top_posts = report["top_posts"][:limit]
+    if not top_posts:
+        return ["- No post-level analytics records returned by Metricool yet."]
+
+    rows = []
+    for post in top_posts:
+        text = _email_snippet(post.get("text"), 150)
+        url = f" URL: {post['url']}" if post.get("url") else ""
+        rows.append(
+            f"- {_platform_label(post.get('platform'))}: {post.get('impressions', 0)} impressions/views, "
+            f"{post.get('reach', 0)} reach, {post.get('clicks', 0)} clicks, "
+            f"{post.get('engagement_actions', 0)} engagements - {text}{url}"
+        )
+    return rows
+
+
+def _email_failure_rows(report: dict[str, Any], limit: int = 5) -> list[str]:
+    failures = report["failures"]
+    if not failures:
+        return ["- No failed Metricool posts found for this report date."]
+
+    rows = [
+        f"- {failure['platform']} post {failure['post_id']}: {failure['status']} - {_email_snippet(failure['detail'], 180)}"
+        for failure in failures[:limit]
+    ]
+    remaining = len(failures) - limit
+    if remaining > 0:
+        rows.append(f"- {remaining} more failed posts are listed in the attached PDF.")
+    return rows
+
+
+def _email_snippet(value: object, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3].rstrip()}..."
+
+
+def _platform_label(platform: object) -> str:
+    key = str(platform or "").lower()
+    return PLATFORM_LABELS.get(key, str(platform or "").title())
 
 
 def _pdf_table(rows: list[list[Any]], column_widths: list[float], header: bool = False) -> Any:
@@ -612,9 +705,12 @@ def _recommendations(platform_rows: list[dict[str, Any]], scheduled_posts: list[
     if failures:
         recommendations.append("Fix failed Metricool posts first so the schedule does not silently lose inventory promotions.")
 
-    if any(row["posts"] for row in platform_rows):
-        best_clicks = max(platform_rows, key=lambda row: (row["clicks"], row["engagement_actions"]))
-        best_engagement = max(platform_rows, key=lambda row: (row["engagement_rate"], row["engagement_actions"]))
+    rows_with_metrics = [
+        row for row in platform_rows if row["clicks"] or row["engagement_actions"] or row["impressions"] or row["reach"]
+    ]
+    if rows_with_metrics:
+        best_clicks = max(rows_with_metrics, key=lambda row: (row["clicks"], row["engagement_actions"], row["impressions"]))
+        best_engagement = max(rows_with_metrics, key=lambda row: (row["engagement_rate"], row["engagement_actions"]))
         recommendations.append(
             f"Prioritize {best_clicks['platform']} for eBay traffic if the click lead holds over several days."
         )
@@ -622,6 +718,10 @@ def _recommendations(platform_rows: list[dict[str, Any]], scheduled_posts: list[
             recommendations.append(
                 f"Use {best_engagement['platform']} style captions as the model for the next product batch."
             )
+    elif any(row["posts"] for row in platform_rows):
+        recommendations.append(
+            "Metricool returned post records, but numeric analytics are still pending; check again after reporting lag catches up."
+        )
     else:
         recommendations.append("Wait for published posts to collect analytics, then compare clicks and engagement by platform.")
 
