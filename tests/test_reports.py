@@ -79,6 +79,8 @@ def test_daily_metricool_report_aggregates_platform_metrics():
     report = asyncio.run(run_report())
 
     assert report["brand"]["blog_id"] == 6278196
+    assert report["totals"]["content_posts"] == 3
+    assert report["totals"]["platform_placements"] == 3
     assert report["totals"]["scheduled_posts"] == 3
     assert report["totals"]["analytics_posts"] == 3
     assert report["totals"]["failed_posts"] == 1
@@ -96,6 +98,8 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
         "timezone": "America/Chicago",
         "brand": {"label": "Horizon Wireless", "blog_id": 6278196},
         "totals": {
+            "content_posts": 1,
+            "platform_placements": 1,
             "scheduled_posts": 1,
             "analytics_posts": 1,
             "published_posts": 1,
@@ -119,17 +123,23 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
     flattened = flatten_report_for_zapier(report)
 
     assert "Horizon Wireless AI Marketing Report" in markdown
-    assert "- Published posts: 1" in markdown
+    assert "- Content posts scheduled: 1" in markdown
+    assert "- Platform placements tracked: 1" in markdown
+    assert "- Published placements: 1" in markdown
     assert "| Platform | Published | Analytics Posts |" in markdown
     assert flattened["subject"] == "Horizon Wireless AI Marketing Report - 2026-05-29"
     assert flattened["email_body"].startswith("Attached is the Horizon Wireless AI Marketing Report")
-    assert "- Published posts: 1" in flattened["email_body"]
+    assert "- Content posts scheduled: 1" in flattened["email_body"]
+    assert "- Platform placements tracked: 1" in flattened["email_body"]
+    assert "- Published placements: 1" in flattened["email_body"]
     assert "Metricool platform analytics:" in flattened["email_body"]
     assert "- Facebook: 1 published, 1 Metricool analytics posts, 100 impressions/views" in flattened["email_body"]
     assert "Metricool top post analytics:" in flattened["email_body"]
     assert "Shop phones" in flattened["email_body"]
     assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29&v=published-status")
     assert flattened["attachment_filename"] == "horizon-ai-marketing-report-2026-05-29.pdf"
+    assert flattened["content_posts"] == 1
+    assert flattened["platform_placements"] == 1
     assert flattened["published_posts"] == 1
     assert flattened["analytics_note"] == "Metricool returned 1 post-level analytics records with numeric metrics."
     assert flattened["top_post_rows"].startswith("- Facebook: 100 impressions/views")
@@ -143,6 +153,8 @@ def test_report_email_body_explains_metricool_records_without_numeric_metrics():
         "timezone": "America/Chicago",
         "brand": {"label": "Horizon Wireless", "blog_id": 6278196},
         "totals": {
+            "content_posts": 1,
+            "platform_placements": 4,
             "scheduled_posts": 4,
             "analytics_posts": 2,
             "published_posts": 2,
@@ -168,6 +180,8 @@ def test_report_email_body_explains_metricool_records_without_numeric_metrics():
     body = report_email_body(report)
 
     assert "Metricool returned 2 post records, but numeric metrics are still 0/not available yet." in body
+    assert "- Content posts scheduled: 1" in body
+    assert "- Platform placements tracked: 4" in body
     assert "- LinkedIn: 2 published, 2 Metricool analytics posts, 0 impressions/views" in body
     assert "- LinkedIn: 0 impressions/views, 0 reach, 0 clicks, 0 engagements - Horizon Wireless listing update" in body
     assert "URL: https://linkedin.com/feed/update/1" in body
@@ -180,6 +194,8 @@ def test_daily_metricool_report_pdf_renders():
         "timezone": "America/Chicago",
         "brand": {"label": "Horizon Wireless", "blog_id": 6278196},
         "totals": {
+            "content_posts": 1,
+            "platform_placements": 1,
             "scheduled_posts": 1,
             "analytics_posts": 1,
             "published_posts": 1,

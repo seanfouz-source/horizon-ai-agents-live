@@ -85,10 +85,11 @@ def format_daily_report_markdown(report: dict[str, Any]) -> str:
         "",
         "## Summary",
         "",
-        f"- Platform posts tracked: {totals['scheduled_posts']}",
-        f"- Published posts: {totals['published_posts']}",
-        f"- Pending posts: {totals['pending_posts']}",
-        f"- Failed posts: {totals['failed_posts']}",
+        f"- Content posts scheduled: {totals['content_posts']}",
+        f"- Platform placements tracked: {totals['platform_placements']}",
+        f"- Published placements: {totals['published_posts']}",
+        f"- Pending placements: {totals['pending_posts']}",
+        f"- Failed placements: {totals['failed_posts']}",
         f"- Analytics posts returned: {totals['analytics_posts']}",
         f"- Impressions/views: {totals['impressions']}",
         f"- Reach: {totals['reach']}",
@@ -198,8 +199,9 @@ def format_daily_report_pdf(report: dict[str, Any]) -> bytes:
 
     totals = report["totals"]
     summary_rows = [
-        ["Posts Tracked", totals["scheduled_posts"], "Published", totals["published_posts"]],
-        ["Pending", totals["pending_posts"], "Failed", totals["failed_posts"]],
+        ["Content Posts", totals["content_posts"], "Placements", totals["platform_placements"]],
+        ["Published", totals["published_posts"], "Pending", totals["pending_posts"]],
+        ["Failed", totals["failed_posts"], "Analytics Posts", totals["analytics_posts"]],
         ["Impressions/Views", totals["impressions"], "Reach", totals["reach"]],
         ["eBay Click Proxy", totals["clicks"], "Engagement Rate", f"{totals['engagement_rate']}%"],
     ]
@@ -292,10 +294,11 @@ def report_email_body(report: dict[str, Any]) -> str:
     return (
         f"Attached is the Horizon Wireless AI Marketing Report for {report['report_date']}.\n\n"
         "Quick snapshot:\n"
-        f"- Posts tracked: {totals['scheduled_posts']}\n"
-        f"- Published posts: {totals['published_posts']}\n"
-        f"- Pending posts: {totals['pending_posts']}\n"
-        f"- Failed posts: {totals['failed_posts']}\n"
+        f"- Content posts scheduled: {totals['content_posts']}\n"
+        f"- Platform placements tracked: {totals['platform_placements']}\n"
+        f"- Published placements: {totals['published_posts']}\n"
+        f"- Pending placements: {totals['pending_posts']}\n"
+        f"- Failed placements: {totals['failed_posts']}\n"
         f"- Metricool analytics posts returned: {totals['analytics_posts']}\n"
         f"- Impressions/views: {totals['impressions']}\n"
         f"- Reach: {totals['reach']}\n"
@@ -326,6 +329,8 @@ def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = Non
         "attachment_url": report_attachment_url(report, base_url),
         "attachment_filename": report_attachment_filename(report),
         "brand_name": report["brand"]["label"],
+        "content_posts": totals["content_posts"],
+        "platform_placements": totals["platform_placements"],
         "scheduled_posts": totals["scheduled_posts"],
         "published_posts": totals["published_posts"],
         "analytics_posts": totals["analytics_posts"],
@@ -619,8 +624,11 @@ def _report_totals(platform_rows: list[dict[str, Any]], scheduled_posts: list[di
     reach = sum(row["reach"] for row in platform_rows)
     engagement_actions = sum(row["engagement_actions"] for row in platform_rows)
     denominator = reach or impressions
+    platform_placements = sum(len(post.get("providers") or []) for post in scheduled_posts)
     return {
-        "scheduled_posts": sum(len(post.get("providers") or []) for post in scheduled_posts),
+        "content_posts": len(scheduled_posts),
+        "platform_placements": platform_placements,
+        "scheduled_posts": platform_placements,
         "analytics_posts": sum(row["posts"] for row in platform_rows),
         "published_posts": sum(row["published_posts"] for row in platform_rows),
         "pending_posts": sum(row["pending_posts"] for row in platform_rows),

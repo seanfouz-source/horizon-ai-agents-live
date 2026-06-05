@@ -201,7 +201,7 @@ async def zapier_daily_report(
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     body = await parse_zapier_body(request) if request.method == "POST" else {}
-    report_date = _parse_report_date(date or body.get("date")) or datetime.now(REPORT_TIMEZONE).date()
+    report_date = _parse_report_date(date or body.get("date"))
     try:
         report = await build_daily_metricool_report(report_date)
     except MetricoolReportError as exc:
