@@ -6,7 +6,7 @@ from agents import Agent, Runner, function_tool
 
 from app.campaigns import request_campaign_media_url
 from app.config import get_settings
-from app.integrations import default_metricool_publication_times, metricool_payload
+from app.integrations import apply_tiktok_daily_post_cap, default_metricool_publication_times, metricool_payload
 from app.inventory import InventoryRepository
 from app.models import (
     CustomerAnswer,
@@ -310,6 +310,7 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
         for post, publication_time in zip(batch.posts, default_schedule, strict=False):
             post.suggested_schedule = publication_time
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
+    _apply_tiktok_cap_to_batch(batch, request.tiktok_daily_post_cap)
     return batch
 
 
@@ -358,10 +359,12 @@ def create_slow_mover_outreach(request: SlowMoverOutreachRequest) -> SlowMoverOu
         promote_all_inventory=request.cross_post_to_all_platforms,
         cross_post_to_all_platforms=request.cross_post_to_all_platforms,
         publish_after=request.publish_after,
+        tiktok_daily_post_cap=request.tiktok_daily_post_cap,
         as_draft=request.as_draft,
         auto_publish=request.auto_publish,
     )
     metricool_payloads = [metricool_payload(post, social_request) for post in posts]
+    suppressed_tiktok = apply_tiktok_daily_post_cap(metricool_payloads, request.tiktok_daily_post_cap)
     for payload, post in zip(metricool_payloads, posts, strict=False):
         payload["comment_keyword"] = _comment_keyword_for_sku(post.product_sku)
         payload["manychat_reply"] = _slow_mover_manychat_reply_from_post(post)
@@ -375,6 +378,7 @@ def create_slow_mover_outreach(request: SlowMoverOutreachRequest) -> SlowMoverOu
         notes=(
             f"Generated {len(posts)} engagement-focused outreach posts for {len(drafts)} slow-moving items. "
             "Use Looping by Zapier over metricool_payloads to schedule every post, and connect the comment keywords to ManyChat replies."
+            + _tiktok_cap_note(suppressed_tiktok, request.tiktok_daily_post_cap)
         ),
     )
 
@@ -571,7 +575,23 @@ def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDr
         ),
     )
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
+    _apply_tiktok_cap_to_batch(batch, request.tiktok_daily_post_cap)
     return batch
+
+
+def _apply_tiktok_cap_to_batch(batch: SocialDraftBatch, daily_cap: int) -> None:
+    suppressed_tiktok = apply_tiktok_daily_post_cap(batch.metricool_payloads, daily_cap)
+    if suppressed_tiktok:
+        batch.notes += _tiktok_cap_note(suppressed_tiktok, daily_cap)
+
+
+def _tiktok_cap_note(suppressed_count: int, daily_cap: int) -> str:
+    if not suppressed_count:
+        return ""
+    return (
+        f" TikTok auto-publish was kept to {daily_cap} posts per scheduled day; "
+        f"{suppressed_count} extra TikTok placements were disabled to avoid TikTok API daily-cap rejection."
+    )
 
 
 def _inventory_items_for_daily_promotion(repository: InventoryRepository, request: SocialDraftRequest) -> list[InventoryItem]:

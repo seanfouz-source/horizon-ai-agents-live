@@ -118,6 +118,7 @@ Example social draft request:
   "query": "all phones",
   "max_products_per_run": 50,
   "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
+  "tiktok_daily_post_cap": 3,
   "brand_name": "Horizon Wireless",
   "as_draft": false,
   "auto_publish": true
@@ -128,7 +129,10 @@ When `promote_all_inventory` is true, the app creates one Metricool payload per
 in-stock listing. By default each payload cross-posts to every requested
 platform, so 18 in-stock phones produce 18 scheduled Metricool posts instead of
 only the first phone. The app staggers those posts across the daily schedule,
-including Saturday and Sunday. Product captions end with a visible `Buy on eBay:` line,
+including Saturday and Sunday. When auto-publishing, TikTok is capped at
+`tiktok_daily_post_cap` placements per scheduled day so TikTok's API does not
+reject the run for too many automated posts; Facebook, Instagram, and LinkedIn
+continue receiving the full queue. Product captions end with a visible `Buy on eBay:` line,
 and the Zapier response also includes `metricool_link_url` fields for Metricool
 link/URL mappings when that field is available. For Metricool's required
 `Publication Date/Time` and `As draft` fields, the response includes both the

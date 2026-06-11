@@ -25,6 +25,7 @@ POST /agent/slow-mover-outreach
   "angles_per_item": 2,
   "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
   "cross_post_to_all_platforms": true,
+  "tiktok_daily_post_cap": 3,
   "brand_name": "Horizon Wireless",
   "as_draft": true,
   "auto_publish": false
@@ -39,6 +40,11 @@ Start with drafts. After the copy and cadence look good, switch to:
   "auto_publish": true
 }
 ```
+
+When `auto_publish` is true, TikTok is capped at `tiktok_daily_post_cap`
+placements per scheduled day. Extra outreach payloads keep Facebook, Instagram,
+and LinkedIn enabled, but TikTok is disabled on those rows so the TikTok API
+does not reject the batch for too many automated posts.
 
 ## Better Slow-Mover Metrics
 

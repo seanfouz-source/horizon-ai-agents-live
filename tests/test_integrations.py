@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.integrations import (
+    apply_tiktok_daily_post_cap,
     default_metricool_publication_time,
     default_metricool_publication_times,
     metricool_payload,
@@ -253,6 +254,59 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
     assert payload["buy_url"] == "https://www.ebay.com/itm/123"
     assert payload["link_url"] == "https://www.ebay.com/itm/123"
     assert payload["facebook_link_url"] == "https://www.ebay.com/itm/123"
+
+
+def test_apply_tiktok_daily_post_cap_keeps_other_platforms_active():
+    payloads = [
+        {
+            "facebook": True,
+            "instagram": True,
+            "tiktok": True,
+            "linkedin": True,
+            "publication_date_time": f"2026-06-12 {hour:02d}:00:00",
+            "as_draft": False,
+            "auto_publish": True,
+        }
+        for hour in range(8, 13)
+    ]
+
+    suppressed_count = apply_tiktok_daily_post_cap(payloads, daily_cap=3)
+
+    assert suppressed_count == 2
+    assert [payload["tiktok"] for payload in payloads] == [True, True, True, False, False]
+    assert all(payload["facebook"] for payload in payloads)
+    assert all(payload["instagram"] for payload in payloads)
+    assert all(payload["linkedin"] for payload in payloads)
+    assert payloads[3]["tiktok_throttle_reason"].startswith("TikTok auto-publish disabled")
+    assert payloads[4]["tiktok_daily_post_cap"] == 3
+
+
+def test_apply_tiktok_daily_post_cap_resets_by_scheduled_day():
+    payloads = [
+        {
+            "tiktok": True,
+            "publication_date_time": "2026-06-12 08:00:00",
+            "as_draft": False,
+            "auto_publish": True,
+        },
+        {
+            "tiktok": True,
+            "publication_date_time": "2026-06-12 09:00:00",
+            "as_draft": False,
+            "auto_publish": True,
+        },
+        {
+            "tiktok": True,
+            "publication_date_time": "2026-06-13 08:00:00",
+            "as_draft": False,
+            "auto_publish": True,
+        },
+    ]
+
+    suppressed_count = apply_tiktok_daily_post_cap(payloads, daily_cap=1)
+
+    assert suppressed_count == 1
+    assert [payload["tiktok"] for payload in payloads] == [True, False, True]
 
 
 def test_zapier_social_drafts_response_uses_tiktok_safe_flat_media():

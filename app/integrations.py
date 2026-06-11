@@ -10,6 +10,7 @@ from app.models import CustomerAnswer, SocialDraftBatch, SocialDraftRequest, Soc
 POSTING_TIMEZONE = ZoneInfo("America/Chicago")
 POSTING_MINIMUM_LEAD_TIME = timedelta(minutes=30)
 METRICOOL_PUBLICATION_FORMAT = "%Y-%m-%d %H:%M:%S"
+TIKTOK_DAILY_POST_CAP_NOTE = "TikTok auto-publish disabled to stay under the daily TikTok API post cap."
 DAILY_POSTING_SLOTS = (
     time(7, 30),
     time(9, 0),
@@ -108,6 +109,34 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def apply_tiktok_daily_post_cap(payloads: list[dict[str, object]], daily_cap: int) -> int:
+    """Disable extra TikTok placements before Metricool asks TikTok to publish them."""
+    if daily_cap < 0:
+        daily_cap = 0
+
+    scheduled_counts: dict[str, int] = {}
+    suppressed_count = 0
+    for payload in payloads:
+        if not payload.get("tiktok"):
+            continue
+        if not _payload_counts_against_tiktok_cap(payload):
+            continue
+
+        scheduled_day = _payload_publication_day(payload)
+        current_count = scheduled_counts.get(scheduled_day, 0)
+        if current_count >= daily_cap:
+            payload["tiktok"] = False
+            payload["tiktok_throttle_reason"] = TIKTOK_DAILY_POST_CAP_NOTE
+            payload["tiktok_daily_post_cap"] = daily_cap
+            suppressed_count += 1
+            continue
+
+        scheduled_counts[scheduled_day] = current_count + 1
+        payload["tiktok_daily_post_cap"] = daily_cap
+
+    return suppressed_count
+
+
 def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
     response = batch.model_dump()
     first_payload = batch.metricool_payloads[0] if batch.metricool_payloads else {}
@@ -166,6 +195,10 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "metricool_facebook_link_url": first_payload.get("facebook_link_url"),
         "metricool_comment_keyword": first_payload.get("comment_keyword"),
         "metricool_manychat_reply": first_payload.get("manychat_reply"),
+        "metricool_tiktok_enabled_count": sum(1 for payload in batch.metricool_payloads if payload.get("tiktok")),
+        "metricool_tiktok_suppressed_count": sum(
+            1 for payload in batch.metricool_payloads if payload.get("tiktok_throttle_reason")
+        ),
         "publicationDate": publication_date_time,
         "draft": as_draft,
     }
@@ -200,6 +233,8 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
         "facebook_link_url",
         "comment_keyword",
         "manychat_reply",
+        "tiktok_daily_post_cap",
+        "tiktok_throttle_reason",
     )
     line_items: dict[str, object] = {"metricool_payload_count": len(payloads)}
     for field in fields:
@@ -256,6 +291,17 @@ def _platform_enabled(post: SocialPost, request: SocialDraftRequest, platform: s
     if request.promote_all_inventory and request.cross_post_to_all_platforms:
         return platform in request.platforms
     return post.platform == platform
+
+
+def _payload_counts_against_tiktok_cap(payload: dict[str, object]) -> bool:
+    return bool(payload.get("auto_publish")) or payload.get("as_draft") is False or payload.get("draft") is False
+
+
+def _payload_publication_day(payload: dict[str, object]) -> str:
+    value = payload.get("publication_date_time") or payload.get("publicationDate")
+    if isinstance(value, str) and len(value) >= 10:
+        return value[:10]
+    return "unscheduled"
 
 
 def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str | None:

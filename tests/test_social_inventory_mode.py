@@ -78,6 +78,46 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
         assert payload["facebook_link_url"] == payload["ebay_url"]
 
 
+def test_all_inventory_mode_caps_tiktok_without_stopping_other_platforms(monkeypatch):
+    items = [
+        InventoryItem(
+            sku=f"EBAY-{index}",
+            title=f"Apple iPhone 14 Pro Max - Gold {index}",
+            condition="Open box",
+            price=565,
+            quantity=1,
+            ebay_url=f"https://www.ebay.com/itm/{index}",
+        )
+        for index in range(1, 6)
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: [f"2026-06-12 {hour:02d}:00:00" for hour in range(8, 8 + count)],
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(
+                promote_all_inventory=True,
+                brand_name="Horizon Wireless",
+                platforms=["facebook", "instagram", "tiktok", "linkedin"],
+                tiktok_daily_post_cap=3,
+                as_draft=False,
+                auto_publish=True,
+            )
+        )
+    )
+
+    assert len(batch.metricool_payloads) == 5
+    assert [payload["tiktok"] for payload in batch.metricool_payloads] == [True, True, True, False, False]
+    assert all(payload["facebook"] for payload in batch.metricool_payloads)
+    assert all(payload["instagram"] for payload in batch.metricool_payloads)
+    assert all(payload["linkedin"] for payload in batch.metricool_payloads)
+    assert "TikTok auto-publish was kept to 3 posts per scheduled day" in batch.notes
+
+
 def test_all_inventory_mode_staggers_from_publish_after(monkeypatch):
     items = [
         InventoryItem(
