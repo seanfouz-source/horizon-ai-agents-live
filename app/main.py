@@ -173,6 +173,32 @@ async def daily_report_pdf(
     date: str | None = None,
     x_horizon_secret: str | None = Header(default=None),
 ) -> Response:
+    content, filename = await _daily_report_pdf_content(request, date, x_horizon_secret)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers=_daily_report_pdf_headers(filename),
+    )
+
+
+@app.head("/reports/daily.pdf")
+async def daily_report_pdf_head(
+    request: Request,
+    date: str | None = None,
+    x_horizon_secret: str | None = Header(default=None),
+) -> Response:
+    content, filename = await _daily_report_pdf_content(request, date, x_horizon_secret)
+    return Response(
+        media_type="application/pdf",
+        headers={**_daily_report_pdf_headers(filename), "Content-Length": str(len(content))},
+    )
+
+
+async def _daily_report_pdf_content(
+    request: Request,
+    date: str | None,
+    x_horizon_secret: str | None,
+) -> tuple[bytes, str]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     try:
         report = await build_daily_metricool_report(_parse_report_date(date))
@@ -181,16 +207,16 @@ async def daily_report_pdf(
     except MetricoolReportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     filename = report_attachment_filename(report)
-    return Response(
-        content=content,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return content, filename
+
+
+def _daily_report_pdf_headers(filename: str) -> dict[str, str]:
+    return {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
 
 
 @app.api_route("/webhooks/zapier/daily-report", methods=["GET", "POST"])
