@@ -283,7 +283,7 @@ def report_attachment_url(report: dict[str, Any], base_url: str | None = None) -
     return f"{base}/reports/daily.pdf?date={quote(report['report_date'])}&v=published-status"
 
 
-def report_email_body(report: dict[str, Any]) -> str:
+def report_email_body(report: dict[str, Any], attachment_url: str | None = None) -> str:
     totals = report["totals"]
     best_platform = _best_platform(report)
     best_line = f"\nBest current platform: {best_platform['platform']}" if best_platform else ""
@@ -291,8 +291,10 @@ def report_email_body(report: dict[str, Any]) -> str:
     platform_rows = "\n".join(_email_platform_rows(report))
     top_post_rows = "\n".join(_email_top_post_rows(report))
     failure_rows = "\n".join(_email_failure_rows(report))
+    attachment_line = f"Report PDF: {attachment_url}\n\n" if attachment_url else ""
     return (
         f"Attached is the Horizon Wireless AI Marketing Report for {report['report_date']}.\n\n"
+        f"{attachment_line}"
         "Quick snapshot:\n"
         f"- Content posts scheduled: {totals['content_posts']}\n"
         f"- Platform placements tracked: {totals['platform_placements']}\n"
@@ -321,12 +323,13 @@ def flatten_report_for_zapier(report: dict[str, Any], base_url: str | None = Non
     markdown = format_daily_report_markdown(report)
     totals = report["totals"]
     best_platform = _best_platform(report)
+    attachment_url = report_attachment_url(report, base_url)
     return {
         "report_date": report["report_date"],
         "subject": f"Horizon Wireless AI Marketing Report - {report['report_date']}",
         "summary_text": markdown,
-        "email_body": report_email_body(report),
-        "attachment_url": report_attachment_url(report, base_url),
+        "email_body": report_email_body(report, attachment_url),
+        "attachment_url": attachment_url,
         "attachment_filename": report_attachment_filename(report),
         "brand_name": report["brand"]["label"],
         "content_posts": totals["content_posts"],

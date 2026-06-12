@@ -138,6 +138,7 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
     assert "Metricool top post analytics:" in flattened["email_body"]
     assert "Shop phones" in flattened["email_body"]
     assert flattened["attachment_url"].endswith("/reports/daily.pdf?date=2026-05-29&v=published-status")
+    assert f"Report PDF: {flattened['attachment_url']}" in flattened["email_body"]
     assert flattened["attachment_filename"] == "horizon-ai-marketing-report-2026-05-29.pdf"
     assert flattened["content_posts"] == 1
     assert flattened["platform_placements"] == 1
