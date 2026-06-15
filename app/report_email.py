@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 import smtplib
 import ssl
+import base64
+import json
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr
 from typing import Protocol
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 class ReportEmailError(RuntimeError):
@@ -15,6 +19,7 @@ class ReportEmailError(RuntimeError):
 
 class EmailSettings(Protocol):
     report_email_to: str
+    report_email_provider: str
     report_email_from: str | None
     report_email_from_name: str
     smtp_host: str | None
@@ -22,6 +27,10 @@ class EmailSettings(Protocol):
     smtp_security: str
     smtp_username: str | None
     smtp_password: str | None
+    gmail_sender: str | None
+    gmail_client_id: str | None
+    gmail_client_secret: str | None
+    gmail_refresh_token: str | None
 
 
 @dataclass(frozen=True)
@@ -65,7 +74,7 @@ def build_message_from_settings(report: dict[str, object], pdf_bytes: bytes, set
         report,
         pdf_bytes,
         recipients=settings.report_email_to,
-        from_address=settings.report_email_from,
+        from_address=_from_address_from_settings(settings),
         from_name=settings.report_email_from_name,
         smtp_username=settings.smtp_username,
     )
@@ -96,6 +105,19 @@ def send_message(
 
 
 def send_message_from_settings(message: EmailMessage, settings: EmailSettings) -> None:
+    provider = settings.report_email_provider.strip().lower()
+    if provider == "gmail":
+        send_gmail_message(
+            message,
+            client_id=settings.gmail_client_id,
+            client_secret=settings.gmail_client_secret,
+            refresh_token=settings.gmail_refresh_token,
+            sender=settings.gmail_sender or settings.report_email_from,
+        )
+        return
+    if provider != "smtp":
+        raise ReportEmailError("REPORT_EMAIL_PROVIDER must be smtp or gmail")
+
     send_message(
         message,
         host=settings.smtp_host,
@@ -104,6 +126,91 @@ def send_message_from_settings(message: EmailMessage, settings: EmailSettings) -
         password=settings.smtp_password,
         security=settings.smtp_security,
     )
+
+
+def send_gmail_message(
+    message: EmailMessage,
+    *,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    refresh_token: str | None = None,
+    sender: str | None = None,
+) -> None:
+    sender_address = (sender or "").strip()
+    if not sender_address:
+        raise ReportEmailError("GMAIL_SENDER or REPORT_EMAIL_FROM is required")
+    message.replace_header("From", formataddr((_from_display_name(message), sender_address)))
+    access_token = gmail_access_token(client_id=client_id, client_secret=client_secret, refresh_token=refresh_token)
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+    request = Request(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        data=json.dumps({"raw": raw_message}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            response.read()
+    except Exception as exc:
+        raise ReportEmailError(f"Gmail API send failed: {exc}") from exc
+
+
+def gmail_access_token(
+    *,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    refresh_token: str | None = None,
+) -> str:
+    resolved_client_id = (client_id or os.getenv("GMAIL_CLIENT_ID", "")).strip()
+    resolved_client_secret = (client_secret or os.getenv("GMAIL_CLIENT_SECRET", "")).strip()
+    resolved_refresh_token = (refresh_token or os.getenv("GMAIL_REFRESH_TOKEN", "")).strip()
+    if not resolved_client_id:
+        raise ReportEmailError("GMAIL_CLIENT_ID is required")
+    if not resolved_client_secret:
+        raise ReportEmailError("GMAIL_CLIENT_SECRET is required")
+    if not resolved_refresh_token:
+        raise ReportEmailError("GMAIL_REFRESH_TOKEN is required")
+
+    request = Request(
+        "https://oauth2.googleapis.com/token",
+        data=urlencode(
+            {
+                "client_id": resolved_client_id,
+                "client_secret": resolved_client_secret,
+                "refresh_token": resolved_refresh_token,
+                "grant_type": "refresh_token",
+            }
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise ReportEmailError(f"Gmail OAuth token refresh failed: {exc}") from exc
+
+    access_token = payload.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise ReportEmailError("Gmail OAuth response did not include an access token")
+    return access_token
+
+
+def _from_address_from_settings(settings: EmailSettings) -> str | None:
+    if settings.report_email_provider.strip().lower() == "gmail":
+        return settings.gmail_sender or settings.report_email_from or "sean.fouz@gmail.com"
+    return settings.report_email_from
+
+
+def _from_display_name(message: EmailMessage) -> str:
+    from_header = message.get("From", "")
+    if "<" in from_header:
+        return from_header.split("<", 1)[0].strip().strip('"')
+    return "Horizon AI Agents"
 
 
 def smtp_config(

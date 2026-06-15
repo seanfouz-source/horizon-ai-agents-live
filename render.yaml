@@ -29,6 +29,18 @@ services:
         sync: false
       - key: WEBHOOK_SHARED_SECRET
         generateValue: true
+      - key: REPORT_EMAIL_PROVIDER
+        value: gmail
+      - key: REPORT_EMAIL_FROM
+        value: sean.fouz@gmail.com
+      - key: GMAIL_SENDER
+        value: sean.fouz@gmail.com
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
   - type: cron
     name: horizon-daily-report-email
     runtime: python
@@ -45,7 +57,19 @@ services:
         value: sean.fouz@gmail.com,horizonwirelesstx@gmail.com
       - key: REPORT_EMAIL_FROM_NAME
         value: Horizon AI Agents
+      - key: REPORT_EMAIL_PROVIDER
+        value: gmail
+      - key: REPORT_EMAIL_FROM
+        value: sean.fouz@gmail.com
+      - key: GMAIL_SENDER
+        value: sean.fouz@gmail.com
       - key: METRICOOL_API_TOKEN
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
         sync: false
       - key: SMTP_HOST
         sync: false
@@ -56,6 +80,4 @@ services:
       - key: SMTP_USERNAME
         sync: false
       - key: SMTP_PASSWORD
-        sync: false
-      - key: REPORT_EMAIL_FROM
         sync: false

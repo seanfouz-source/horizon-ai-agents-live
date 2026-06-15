@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.report_email import build_message, env_bool, send_message, split_addresses
+from app.report_email import build_message, env_bool, send_gmail_message, send_message, split_addresses
 
 
 DEFAULT_BASE_URL = "https://horizon-ai-agents.onrender.com"
@@ -23,7 +23,10 @@ def main() -> int:
         if env_bool("DRY_RUN"):
             print(f"Prepared report email: {message['Subject']} -> {message['To']}")
             return 0
-        send_message(message)
+        if os.getenv("REPORT_EMAIL_PROVIDER", "smtp").strip().lower() == "gmail":
+            send_gmail_message(message, sender=os.getenv("GMAIL_SENDER") or os.getenv("REPORT_EMAIL_FROM"))
+        else:
+            send_message(message)
         print(f"Sent report email: {message['Subject']} -> {message['To']}")
         return 0
     except Exception as exc:

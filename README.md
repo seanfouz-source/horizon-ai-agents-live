@@ -120,9 +120,11 @@ GitHub Actions can send the same report without Zapier:
 Render can send the same report without Zapier or GitHub:
 
 1. The `render.yaml` blueprint includes a `horizon-daily-report-email` Cron Job scheduled at `10 8 * * *`.
-2. Add Render environment variables: `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and optionally `SMTP_PORT`, `SMTP_SECURITY`, `REPORT_EMAIL_TO`, `REPORT_EMAIL_FROM`, and `REPORT_EMAIL_FROM_NAME`.
-3. The Cron Job command is `python scripts/send_render_daily_report_email.py`.
-4. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
+2. To send from Gmail, set `REPORT_EMAIL_PROVIDER=gmail`, `REPORT_EMAIL_FROM=sean.fouz@gmail.com`, and `GMAIL_SENDER=sean.fouz@gmail.com`.
+3. Add Google OAuth variables in Render: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN`.
+4. Generate the refresh token locally with `python scripts/create_gmail_refresh_token.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET`.
+5. The Cron Job command is `python scripts/send_render_daily_report_email.py`.
+6. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
 
 Example social draft request:
 

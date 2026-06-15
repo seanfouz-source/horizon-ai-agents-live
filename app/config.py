@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     public_base_url: str = "https://horizon-ai-agents.onrender.com"
     database_path: Path = BASE_DIR / "data" / "horizon_agents.db"
     report_email_to: str = "sean.fouz@gmail.com,horizonwirelesstx@gmail.com"
+    report_email_provider: str = "smtp"
     report_email_from: str | None = None
     report_email_from_name: str = "Horizon AI Agents"
     smtp_host: str | None = None
@@ -42,6 +43,10 @@ class Settings(BaseSettings):
     smtp_security: str = "starttls"
     smtp_username: str | None = None
     smtp_password: str | None = None
+    gmail_sender: str | None = None
+    gmail_client_id: str | None = None
+    gmail_client_secret: str | None = None
+    gmail_refresh_token: str | None = None
 
     @property
     def resolved_database_path(self) -> Path:
