@@ -22,7 +22,7 @@ jobs:
       REPORT_EMAIL_FROM: ${{ vars.REPORT_EMAIL_FROM || secrets.SMTP_USERNAME }}
       REPORT_EMAIL_FROM_NAME: ${{ vars.REPORT_EMAIL_FROM_NAME || 'Horizon AI Agents' }}
       WEBHOOK_SHARED_SECRET: ${{ secrets.WEBHOOK_SHARED_SECRET }}
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST || 'smtp.gmail.com' }}
       SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
       SMTP_SECURITY: ${{ secrets.SMTP_SECURITY || 'starttls' }}
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
