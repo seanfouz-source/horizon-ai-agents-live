@@ -117,6 +117,13 @@ GitHub Actions can send the same report without Zapier:
 3. Required GitHub Secrets: `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`.
 4. Optional GitHub Secrets or Variables: `SMTP_PORT`, `SMTP_SECURITY`, `REPORT_BASE_URL`, `REPORT_EMAIL_TO`, `REPORT_EMAIL_FROM`, `REPORT_EMAIL_FROM_NAME`, and `WEBHOOK_SHARED_SECRET`.
 
+Render can send the same report without Zapier or GitHub:
+
+1. The `render.yaml` blueprint includes a `horizon-daily-report-email` Cron Job scheduled at `10 8 * * *`.
+2. Add Render environment variables: `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and optionally `SMTP_PORT`, `SMTP_SECURITY`, `REPORT_EMAIL_TO`, `REPORT_EMAIL_FROM`, and `REPORT_EMAIL_FROM_NAME`.
+3. The Cron Job command is `python scripts/send_render_daily_report_email.py`.
+4. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
+
 Example social draft request:
 
 ```json

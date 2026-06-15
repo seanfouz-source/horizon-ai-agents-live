@@ -29,3 +29,33 @@ services:
         sync: false
       - key: WEBHOOK_SHARED_SECRET
         generateValue: true
+  - type: cron
+    name: horizon-daily-report-email
+    runtime: python
+    plan: starter
+    buildCommand: python -m pip install -e .
+    startCommand: python scripts/send_render_daily_report_email.py
+    schedule: "10 8 * * *"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.13
+      - key: PUBLIC_BASE_URL
+        value: https://horizon-ai-agents.onrender.com
+      - key: REPORT_EMAIL_TO
+        value: sean.fouz@gmail.com,horizonwirelesstx@gmail.com
+      - key: REPORT_EMAIL_FROM_NAME
+        value: Horizon AI Agents
+      - key: METRICOOL_API_TOKEN
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURITY
+        value: starttls
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: REPORT_EMAIL_FROM
+        sync: false

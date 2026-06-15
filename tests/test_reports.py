@@ -269,3 +269,52 @@ def test_daily_report_pdf_head_supports_attachment_preflight(monkeypatch):
     assert head_response.headers["content-type"] == "application/pdf"
     assert head_response.headers["content-length"] == str(len(get_response.content))
     assert head_response.headers["content-disposition"] == 'attachment; filename="horizon-ai-marketing-report-2026-06-10.pdf"'
+
+
+def test_daily_report_email_endpoint_dry_run_prepares_pdf(monkeypatch):
+    import app.main as main_module
+
+    report = {
+        "report_date": "2026-06-10",
+        "timezone": "America/Chicago",
+        "brand": {"label": "Horizon Wireless", "blog_id": 6278196},
+        "totals": {
+            "content_posts": 1,
+            "platform_placements": 1,
+            "scheduled_posts": 1,
+            "analytics_posts": 1,
+            "published_posts": 1,
+            "pending_posts": 0,
+            "failed_posts": 0,
+            "impressions": 100,
+            "reach": 80,
+            "clicks": 5,
+            "engagement_actions": 10,
+            "engagement_rate": 12.5,
+        },
+        "platforms": [
+            {"platform": "facebook", "posts": 1, "scheduled_posts": 1, "published_posts": 1, "draft_posts": 0, "impressions": 100, "reach": 80, "clicks": 5, "engagement_actions": 10, "engagement_rate": 12.5, "pending_posts": 0, "failed_posts": 0},
+        ],
+        "scheduled_posts": [],
+        "top_posts": [{"platform": "facebook", "impressions": 100, "reach": 80, "clicks": 5, "engagement_actions": 10, "text": "Shop phones"}],
+        "failures": [],
+        "recommendations": ["Post more iPhone listings."],
+    }
+
+    async def fake_build_daily_metricool_report(report_date=None):
+        return report
+
+    monkeypatch.setattr(main_module, "build_daily_metricool_report", fake_build_daily_metricool_report)
+    monkeypatch.setattr(main_module.settings, "report_email_to", "owner@example.com")
+    monkeypatch.setattr(main_module.settings, "report_email_from", "reports@example.com")
+
+    client = TestClient(main_module.app)
+    response = client.post("/reports/daily/email?date=2026-06-10&dry_run=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "prepared"
+    assert payload["dry_run"] is True
+    assert payload["subject"] == "Horizon Wireless AI Marketing Report - 2026-06-10"
+    assert payload["to"] == "owner@example.com"
+    assert payload["attachment_filename"] == "horizon-ai-marketing-report-2026-06-10.pdf"

@@ -41,6 +41,7 @@ from app.reports import (
     format_daily_report_pdf,
     report_attachment_filename,
 )
+from app.report_email import ReportEmailError, build_message_from_settings, send_message_from_settings
 from app.store_sync import StorePageSyncer
 
 
@@ -145,10 +146,9 @@ async def daily_report(
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     try:
-        report = await build_daily_metricool_report(_parse_report_date(date))
+        report = await _build_daily_report(_parse_report_date(date))
     except MetricoolReportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
     return report
 
 
@@ -160,10 +160,9 @@ async def daily_report_markdown(
 ) -> Response:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     try:
-        report = await build_daily_metricool_report(_parse_report_date(date))
+        report = await _build_daily_report(_parse_report_date(date))
     except MetricoolReportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
     return Response(content=format_daily_report_markdown(report), media_type="text/markdown")
 
 
@@ -201,13 +200,42 @@ async def _daily_report_pdf_content(
 ) -> tuple[bytes, str]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     try:
-        report = await build_daily_metricool_report(_parse_report_date(date))
-        report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
+        report = await _build_daily_report(_parse_report_date(date))
         content = format_daily_report_pdf(report)
     except MetricoolReportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     filename = report_attachment_filename(report)
     return content, filename
+
+
+@app.post("/reports/daily/email")
+async def daily_report_email(
+    request: Request,
+    date: str | None = None,
+    dry_run: bool = False,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    try:
+        report = await _build_daily_report(_parse_report_date(date))
+        report_fields = flatten_report_for_zapier(report)
+        pdf_bytes = format_daily_report_pdf(report)
+        message = build_message_from_settings(report_fields, pdf_bytes, settings)
+        if not dry_run:
+            send_message_from_settings(message, settings)
+    except MetricoolReportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ReportEmailError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "status": "prepared" if dry_run else "sent",
+        "dry_run": dry_run,
+        "report_date": report_fields["report_date"],
+        "subject": message["Subject"],
+        "to": message["To"],
+        "attachment_filename": report_fields["attachment_filename"],
+    }
 
 
 def _daily_report_pdf_headers(filename: str) -> dict[str, str]:
@@ -229,10 +257,9 @@ async def zapier_daily_report(
     body = await parse_zapier_body(request) if request.method == "POST" else {}
     report_date = _parse_report_date(date or body.get("date"))
     try:
-        report = await build_daily_metricool_report(report_date)
+        report = await _build_daily_report(report_date)
     except MetricoolReportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
     return flatten_report_for_zapier(report)
 
 
@@ -461,6 +488,12 @@ async def parse_zapier_body(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Zapier payload must be a JSON object.")
 
     return payload
+
+
+async def _build_daily_report(report_date: date | None = None) -> dict[str, Any]:
+    report = await build_daily_metricool_report(report_date)
+    report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
+    return report
 
 
 def _zapier_slow_mover_outreach_response(plan: SlowMoverOutreachPlan) -> dict[str, Any]:
