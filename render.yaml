@@ -47,7 +47,7 @@ services:
     plan: starter
     buildCommand: python -m pip install -e .
     startCommand: python scripts/send_render_daily_report_email.py
-    schedule: "10 8 * * *"
+    schedule: "15 5 * * *"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.13
