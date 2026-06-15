@@ -38,18 +38,27 @@ class OAuthCallbackServer(HTTPServer):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create a Gmail OAuth refresh token for Render report emails.")
-    parser.add_argument("--client-id", required=True)
-    parser.add_argument("--client-secret", required=True)
+    parser.add_argument("--credentials-file", help="Google OAuth client JSON downloaded from Google Cloud.")
+    parser.add_argument("--client-id")
+    parser.add_argument("--client-secret")
+    parser.add_argument("--client-secret-file", help="File containing only the Google OAuth client secret.")
+    parser.add_argument("--env-output-file", help="Write Render environment variables to this file instead of printing secrets.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
+    client_id, client_secret = _load_client_credentials(
+        args.credentials_file,
+        args.client_id,
+        args.client_secret,
+        args.client_secret_file,
+    )
 
     redirect_uri = f"http://{args.host}:{args.port}/oauth2callback"
     state = secrets.token_urlsafe(24)
     authorization_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
         {
-            "client_id": args.client_id,
+            "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": SCOPE,
@@ -77,8 +86,8 @@ def main() -> int:
         return 1
 
     token_payload = exchange_code(
-        client_id=args.client_id,
-        client_secret=args.client_secret,
+        client_id=client_id,
+        client_secret=client_secret,
         code=server.authorization_code,
         redirect_uri=redirect_uri,
     )
@@ -87,14 +96,47 @@ def main() -> int:
         print("Google did not return a refresh token. Re-run with prompt=consent or remove the old app grant.", file=sys.stderr)
         return 1
 
-    print("\nAdd these to Render as environment variables:")
-    print("REPORT_EMAIL_PROVIDER=gmail")
-    print("REPORT_EMAIL_FROM=sean.fouz@gmail.com")
-    print("GMAIL_SENDER=sean.fouz@gmail.com")
-    print(f"GMAIL_CLIENT_ID={args.client_id}")
-    print("GMAIL_CLIENT_SECRET=<the same client secret you entered>")
-    print(f"GMAIL_REFRESH_TOKEN={refresh_token}")
+    env_lines = [
+        "REPORT_EMAIL_PROVIDER=gmail",
+        "REPORT_EMAIL_FROM=sean.fouz@gmail.com",
+        "GMAIL_SENDER=sean.fouz@gmail.com",
+        f"GMAIL_CLIENT_ID={client_id}",
+        f"GMAIL_CLIENT_SECRET={client_secret}",
+        f"GMAIL_REFRESH_TOKEN={refresh_token}",
+    ]
+    if args.env_output_file:
+        with open(args.env_output_file, "w", encoding="utf-8") as file:
+            file.write("\n".join(env_lines) + "\n")
+        print(f"\nGmail approved. Render environment variables were written to {args.env_output_file}.")
+    else:
+        print("\nAdd these to Render as environment variables:")
+        print("REPORT_EMAIL_PROVIDER=gmail")
+        print("REPORT_EMAIL_FROM=sean.fouz@gmail.com")
+        print("GMAIL_SENDER=sean.fouz@gmail.com")
+        print(f"GMAIL_CLIENT_ID={client_id}")
+        print("GMAIL_CLIENT_SECRET=<the same client secret you entered>")
+        print(f"GMAIL_REFRESH_TOKEN={refresh_token}")
     return 0
+
+
+def _load_client_credentials(
+    credentials_file: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+    client_secret_file: str | None,
+) -> tuple[str, str]:
+    if credentials_file:
+        with open(credentials_file, encoding="utf-8") as file:
+            payload = json.load(file)
+        credentials = payload.get("web") or payload.get("installed") or payload
+        client_id = credentials.get("client_id") or client_id
+        client_secret = credentials.get("client_secret") or client_secret
+    if client_secret_file:
+        with open(client_secret_file, encoding="utf-8") as file:
+            client_secret = file.read().strip()
+    if not client_id or not client_secret:
+        raise SystemExit("Provide --credentials-file or both --client-id and a client secret.")
+    return client_id, client_secret
 
 
 def exchange_code(*, client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict[str, object]:
