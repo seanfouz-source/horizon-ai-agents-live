@@ -1,0 +1,39 @@
+name: Daily AI Marketing Report Email
+
+on:
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Optional report date, YYYY-MM-DD. Blank uses yesterday in Central time."
+        required: false
+        type: string
+  schedule:
+    - cron: "10 8 * * *"
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL || 'https://horizon-ai-agents.onrender.com' }}
+      REPORT_DATE: ${{ github.event.inputs.report_date || '' }}
+      REPORT_EMAIL_TO: ${{ vars.REPORT_EMAIL_TO || 'sean.fouz@gmail.com,horizonwirelesstx@gmail.com' }}
+      REPORT_EMAIL_FROM: ${{ vars.REPORT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+      REPORT_EMAIL_FROM_NAME: ${{ vars.REPORT_EMAIL_FROM_NAME || 'Horizon AI Agents' }}
+      WEBHOOK_SHARED_SECRET: ${{ secrets.WEBHOOK_SHARED_SECRET }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+      SMTP_SECURITY: ${{ secrets.SMTP_SECURITY || 'starttls' }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Send daily report email
+        run: python scripts/send_daily_report_email.py

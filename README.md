@@ -110,6 +110,13 @@ For daily reporting:
 3. Optional query: `date=YYYY-MM-DD`. If omitted, the report uses yesterday in Central time.
 4. Action: Email by Zapier, Gmail, Slack, or Google Sheets using `email_body` for the message and `attachment_url` for the report PDF.
 
+GitHub Actions can send the same report without Zapier:
+
+1. Workflow: `.github/workflows/daily-report-email.yml`, scheduled for `08:10 UTC` daily.
+2. Script: `python scripts/send_daily_report_email.py`.
+3. Required GitHub Secrets: `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`.
+4. Optional GitHub Secrets or Variables: `SMTP_PORT`, `SMTP_SECURITY`, `REPORT_BASE_URL`, `REPORT_EMAIL_TO`, `REPORT_EMAIL_FROM`, `REPORT_EMAIL_FROM_NAME`, and `WEBHOOK_SHARED_SECRET`.
+
 Example social draft request:
 
 ```json
