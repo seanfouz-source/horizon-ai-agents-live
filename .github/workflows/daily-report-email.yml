@@ -12,6 +12,7 @@ on:
 
 jobs:
   send-report:
+    if: github.repository == 'seanfouz-source/horizon-ai-agents-live'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
