@@ -121,9 +121,9 @@ Render can send the same report without Zapier or GitHub:
 
 1. The `render.yaml` blueprint includes a `horizon-daily-report-email` Cron Job scheduled at `15 5 * * *`.
 2. To send from Gmail, set `REPORT_EMAIL_PROVIDER=gmail`, `REPORT_EMAIL_FROM=sean.fouz@gmail.com`, and `GMAIL_SENDER=sean.fouz@gmail.com`.
-3. Add Google OAuth variables in Render: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN`.
+3. Add Google OAuth variables to the web service in Render: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN`.
 4. Generate the refresh token locally with `python scripts/create_gmail_refresh_token.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET`.
-5. The Cron Job command is `python scripts/send_render_daily_report_email.py`.
+5. The Cron Job command calls `POST https://horizon-ai-agents.onrender.com/reports/daily/email`, so Gmail and Metricool credentials stay on the web service.
 6. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
 
 Example social draft request:

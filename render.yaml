@@ -45,39 +45,9 @@ services:
     name: horizon-daily-report-email
     runtime: python
     plan: starter
-    buildCommand: python -m pip install -e .
-    startCommand: python scripts/send_render_daily_report_email.py
+    buildCommand: python --version
+    startCommand: python -c "from urllib.request import Request, urlopen; print(urlopen(Request('https://horizon-ai-agents.onrender.com/reports/daily/email', method='POST'), timeout=120).read().decode())"
     schedule: "15 5 * * *"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.13
-      - key: PUBLIC_BASE_URL
-        value: https://horizon-ai-agents.onrender.com
-      - key: REPORT_EMAIL_TO
-        value: sean.fouz@gmail.com,horizonwirelesstx@gmail.com
-      - key: REPORT_EMAIL_FROM_NAME
-        value: Horizon AI Agents
-      - key: REPORT_EMAIL_PROVIDER
-        value: gmail
-      - key: REPORT_EMAIL_FROM
-        value: sean.fouz@gmail.com
-      - key: GMAIL_SENDER
-        value: sean.fouz@gmail.com
-      - key: METRICOOL_API_TOKEN
-        sync: false
-      - key: GMAIL_CLIENT_ID
-        sync: false
-      - key: GMAIL_CLIENT_SECRET
-        sync: false
-      - key: GMAIL_REFRESH_TOKEN
-        sync: false
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_SECURITY
-        value: starttls
-      - key: SMTP_USERNAME
-        sync: false
-      - key: SMTP_PASSWORD
-        sync: false
