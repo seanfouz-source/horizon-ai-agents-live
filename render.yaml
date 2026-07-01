@@ -39,6 +39,8 @@ services:
         sync: false
       - key: GMAIL_CLIENT_SECRET
         sync: false
+      - key: GMAIL_CLIENT_CREDENTIALS_FILE
+        value: /etc/secrets/client_secret_225009040001-55c5hksat2o9pf35emqvprb3kkti746j.apps.googleusercontent.com.json
       - key: GMAIL_REFRESH_TOKEN
         sync: false
   - type: cron

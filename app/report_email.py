@@ -250,23 +250,15 @@ def gmail_oauth_credentials(
     credentials_file: Path | str | None = None,
     client_secret_file: Path | str | None = None,
 ) -> GmailOAuthCredentials:
-    resolved_client_id = _coalesce(
-        client_id,
-        _setting_value(settings, "gmail_client_id"),
-        os.getenv("GMAIL_CLIENT_ID"),
-    )
-    resolved_client_secret = _coalesce(
-        client_secret,
-        _setting_value(settings, "gmail_client_secret"),
-        os.getenv("GMAIL_CLIENT_SECRET"),
-    )
+    resolved_client_id = _coalesce(client_id)
+    resolved_client_secret = _coalesce(client_secret)
 
     resolved_credentials_file = _coalesce(
         credentials_file,
         _setting_value(settings, "gmail_client_credentials_file"),
         os.getenv("GMAIL_CLIENT_CREDENTIALS_FILE"),
     )
-    if resolved_credentials_file and (not resolved_client_id or not resolved_client_secret):
+    if resolved_credentials_file:
         file_client_id, file_client_secret = _load_google_oauth_credentials_file(Path(resolved_credentials_file))
         resolved_client_id = resolved_client_id or file_client_id
         resolved_client_secret = resolved_client_secret or file_client_secret
@@ -279,12 +271,21 @@ def gmail_oauth_credentials(
     if resolved_client_secret_file and not resolved_client_secret:
         resolved_client_secret = _read_secret_file(Path(resolved_client_secret_file))
 
-    if not resolved_client_id or not resolved_client_secret:
+    if not resolved_credentials_file and (not resolved_client_id or not resolved_client_secret):
         discovered_file = _discover_google_oauth_credentials_file()
         if discovered_file:
             file_client_id, file_client_secret = _load_google_oauth_credentials_file(discovered_file)
             resolved_client_id = resolved_client_id or file_client_id
             resolved_client_secret = resolved_client_secret or file_client_secret
+
+    resolved_client_id = resolved_client_id or _coalesce(
+        _setting_value(settings, "gmail_client_id"),
+        os.getenv("GMAIL_CLIENT_ID"),
+    )
+    resolved_client_secret = resolved_client_secret or _coalesce(
+        _setting_value(settings, "gmail_client_secret"),
+        os.getenv("GMAIL_CLIENT_SECRET"),
+    )
 
     if not resolved_client_id:
         raise ReportEmailError("GMAIL_CLIENT_ID or GMAIL_CLIENT_CREDENTIALS_FILE is required")

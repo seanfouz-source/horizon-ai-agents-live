@@ -114,6 +114,21 @@ def test_gmail_oauth_credentials_loads_google_credentials_file(tmp_path):
     assert credentials.client_secret == "file-client-secret"
 
 
+def test_gmail_oauth_credentials_file_takes_precedence_over_stale_env(monkeypatch, tmp_path):
+    credentials_file = tmp_path / "client_secret_google.json"
+    credentials_file.write_text(
+        json.dumps({"web": {"client_id": "file-client-id", "client_secret": "file-client-secret"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GMAIL_CLIENT_ID", "stale-client-id")
+    monkeypatch.setenv("GMAIL_CLIENT_SECRET", "stale-client-secret")
+
+    credentials = report_email.gmail_oauth_credentials(credentials_file=credentials_file)
+
+    assert credentials.client_id == "file-client-id"
+    assert credentials.client_secret == "file-client-secret"
+
+
 def test_gmail_access_token_includes_google_error_body(monkeypatch):
     def fake_urlopen(request, timeout=60):
         raise HTTPError(
