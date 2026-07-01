@@ -35,13 +35,9 @@ services:
         value: sean.fouz@gmail.com
       - key: GMAIL_SENDER
         value: sean.fouz@gmail.com
-      - key: GMAIL_CLIENT_ID
-        sync: false
-      - key: GMAIL_CLIENT_SECRET
-        sync: false
       - key: GMAIL_CLIENT_CREDENTIALS_FILE
         value: /etc/secrets/client_secret_225009040001-55c5hksat2o9pf35emqvprb3kkti746j.apps.googleusercontent.com.json
-      - key: GMAIL_REFRESH_TOKEN
+      - key: GMAIL_REFRESH_TOKEN_CURRENT
         sync: false
   - type: cron
     name: horizon-daily-report-email

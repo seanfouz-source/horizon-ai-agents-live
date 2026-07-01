@@ -1,14 +1,20 @@
 from urllib.parse import parse_qs, urlparse
+import json
 
 from fastapi.testclient import TestClient
 
 
-def test_gmail_oauth_start_redirects_to_google_with_render_callback(monkeypatch):
+def test_gmail_oauth_start_redirects_to_google_with_render_callback(monkeypatch, tmp_path):
     import app.main as main_module
 
+    credentials_file = tmp_path / "client_secret_google.json"
+    credentials_file.write_text(
+        json.dumps({"web": {"client_id": "client-id", "client_secret": "client-secret"}}),
+        encoding="utf-8",
+    )
+
     monkeypatch.setattr(main_module.settings, "webhook_shared_secret", "shared-secret")
-    monkeypatch.setattr(main_module.settings, "gmail_client_id", "client-id")
-    monkeypatch.setattr(main_module.settings, "gmail_client_secret", "client-secret")
+    monkeypatch.setattr(main_module.settings, "gmail_client_credentials_file", credentials_file)
     monkeypatch.setattr(main_module.settings, "gmail_sender", "sean.fouz@gmail.com")
     monkeypatch.setattr(main_module.settings, "public_base_url", "https://horizon-ai-agents.onrender.com")
 
@@ -28,12 +34,17 @@ def test_gmail_oauth_start_redirects_to_google_with_render_callback(monkeypatch)
     assert main_module._verify_gmail_oauth_state(query["state"][0]) is True
 
 
-def test_gmail_oauth_callback_exchanges_code_and_returns_refresh_token(monkeypatch):
+def test_gmail_oauth_callback_exchanges_code_and_returns_refresh_token(monkeypatch, tmp_path):
     import app.main as main_module
 
+    credentials_file = tmp_path / "client_secret_google.json"
+    credentials_file.write_text(
+        json.dumps({"web": {"client_id": "client-id", "client_secret": "client-secret"}}),
+        encoding="utf-8",
+    )
+
     monkeypatch.setattr(main_module.settings, "webhook_shared_secret", "shared-secret")
-    monkeypatch.setattr(main_module.settings, "gmail_client_id", "client-id")
-    monkeypatch.setattr(main_module.settings, "gmail_client_secret", "client-secret")
+    monkeypatch.setattr(main_module.settings, "gmail_client_credentials_file", credentials_file)
     monkeypatch.setattr(main_module.settings, "public_base_url", "https://horizon-ai-agents.onrender.com")
 
     calls = []
@@ -50,5 +61,5 @@ def test_gmail_oauth_callback_exchanges_code_and_returns_refresh_token(monkeypat
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert "GMAIL_REFRESH_TOKEN=refresh-token" in response.text
+    assert "GMAIL_REFRESH_TOKEN_CURRENT=refresh-token" in response.text
     assert calls == [("auth-code", "https://horizon-ai-agents.onrender.com/oauth2callback", main_module.settings)]

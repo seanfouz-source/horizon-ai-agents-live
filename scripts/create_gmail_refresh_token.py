@@ -100,9 +100,7 @@ def main() -> int:
         "REPORT_EMAIL_PROVIDER=gmail",
         "REPORT_EMAIL_FROM=sean.fouz@gmail.com",
         "GMAIL_SENDER=sean.fouz@gmail.com",
-        f"GMAIL_CLIENT_ID={client_id}",
-        f"GMAIL_CLIENT_SECRET={client_secret}",
-        f"GMAIL_REFRESH_TOKEN={refresh_token}",
+        f"GMAIL_REFRESH_TOKEN_CURRENT={refresh_token}",
     ]
     if args.env_output_file:
         with open(args.env_output_file, "w", encoding="utf-8") as file:
@@ -113,9 +111,7 @@ def main() -> int:
         print("REPORT_EMAIL_PROVIDER=gmail")
         print("REPORT_EMAIL_FROM=sean.fouz@gmail.com")
         print("GMAIL_SENDER=sean.fouz@gmail.com")
-        print(f"GMAIL_CLIENT_ID={client_id}")
-        print("GMAIL_CLIENT_SECRET=<the same client secret you entered>")
-        print(f"GMAIL_REFRESH_TOKEN={refresh_token}")
+        print(f"GMAIL_REFRESH_TOKEN_CURRENT={refresh_token}")
     return 0
 
 

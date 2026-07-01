@@ -44,11 +44,8 @@ class Settings(BaseSettings):
     smtp_username: str | None = None
     smtp_password: str | None = None
     gmail_sender: str | None = None
-    gmail_client_id: str | None = None
-    gmail_client_secret: str | None = None
     gmail_client_credentials_file: Path | None = None
-    gmail_client_secret_file: Path | None = None
-    gmail_refresh_token: str | None = None
+    gmail_refresh_token_current: str | None = None
 
     @property
     def resolved_database_path(self) -> Path:

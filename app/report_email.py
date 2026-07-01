@@ -30,11 +30,8 @@ class EmailSettings(Protocol):
     smtp_username: str | None
     smtp_password: str | None
     gmail_sender: str | None
-    gmail_client_id: str | None
-    gmail_client_secret: str | None
     gmail_client_credentials_file: Path | str | None
-    gmail_client_secret_file: Path | str | None
-    gmail_refresh_token: str | None
+    gmail_refresh_token_current: str | None
 
 
 @dataclass(frozen=True)
@@ -122,7 +119,7 @@ def send_message_from_settings(message: EmailMessage, settings: EmailSettings) -
             message,
             client_id=credentials.client_id,
             client_secret=credentials.client_secret,
-            refresh_token=settings.gmail_refresh_token,
+            refresh_token=settings.gmail_refresh_token_current,
             sender=settings.gmail_sender or settings.report_email_from,
         )
         return
@@ -179,9 +176,9 @@ def gmail_access_token(
     refresh_token: str | None = None,
 ) -> str:
     credentials = gmail_oauth_credentials(client_id=client_id, client_secret=client_secret)
-    resolved_refresh_token = (refresh_token or os.getenv("GMAIL_REFRESH_TOKEN", "")).strip()
+    resolved_refresh_token = (refresh_token or os.getenv("GMAIL_REFRESH_TOKEN_CURRENT", "")).strip()
     if not resolved_refresh_token:
-        raise ReportEmailError("GMAIL_REFRESH_TOKEN is required")
+        raise ReportEmailError("GMAIL_REFRESH_TOKEN_CURRENT is required")
 
     request = Request(
         "https://oauth2.googleapis.com/token",
@@ -263,11 +260,7 @@ def gmail_oauth_credentials(
         resolved_client_id = resolved_client_id or file_client_id
         resolved_client_secret = resolved_client_secret or file_client_secret
 
-    resolved_client_secret_file = _coalesce(
-        client_secret_file,
-        _setting_value(settings, "gmail_client_secret_file"),
-        os.getenv("GMAIL_CLIENT_SECRET_FILE"),
-    )
+    resolved_client_secret_file = _coalesce(client_secret_file)
     if resolved_client_secret_file and not resolved_client_secret:
         resolved_client_secret = _read_secret_file(Path(resolved_client_secret_file))
 
@@ -278,19 +271,10 @@ def gmail_oauth_credentials(
             resolved_client_id = resolved_client_id or file_client_id
             resolved_client_secret = resolved_client_secret or file_client_secret
 
-    resolved_client_id = resolved_client_id or _coalesce(
-        _setting_value(settings, "gmail_client_id"),
-        os.getenv("GMAIL_CLIENT_ID"),
-    )
-    resolved_client_secret = resolved_client_secret or _coalesce(
-        _setting_value(settings, "gmail_client_secret"),
-        os.getenv("GMAIL_CLIENT_SECRET"),
-    )
-
     if not resolved_client_id:
-        raise ReportEmailError("GMAIL_CLIENT_ID or GMAIL_CLIENT_CREDENTIALS_FILE is required")
+        raise ReportEmailError("GMAIL_CLIENT_CREDENTIALS_FILE is required")
     if not resolved_client_secret:
-        raise ReportEmailError("GMAIL_CLIENT_SECRET, GMAIL_CLIENT_SECRET_FILE, or GMAIL_CLIENT_CREDENTIALS_FILE is required")
+        raise ReportEmailError("GMAIL_CLIENT_CREDENTIALS_FILE is required")
     return GmailOAuthCredentials(client_id=resolved_client_id, client_secret=resolved_client_secret)
 
 

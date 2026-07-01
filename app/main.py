@@ -668,7 +668,7 @@ def _gmail_oauth_success_html(refresh_token: str) -> str:
 <body>
   <h1>Gmail connected</h1>
   <p>Copy this value into Render for the <code>horizon-ai-agents</code> web service.</p>
-  <pre>GMAIL_REFRESH_TOKEN={escaped_token}</pre>
+  <pre>GMAIL_REFRESH_TOKEN_CURRENT={escaped_token}</pre>
   <p>After saving the environment variable, trigger the daily report cron again.</p>
 </body>
 </html>"""
