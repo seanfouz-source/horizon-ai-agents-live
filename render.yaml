@@ -46,7 +46,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: python --version
-    startCommand: python -c "from urllib.request import Request, urlopen; print(urlopen(Request('https://horizon-ai-agents.onrender.com/reports/daily/email', method='POST'), timeout=120).read().decode())"
+    startCommand: python scripts/post_render_daily_report_email.py
     schedule: "15 5 * * *"
     envVars:
       - key: PYTHON_VERSION
