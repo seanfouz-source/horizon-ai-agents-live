@@ -11,19 +11,7 @@ POSTING_TIMEZONE = ZoneInfo("America/Chicago")
 POSTING_MINIMUM_LEAD_TIME = timedelta(minutes=30)
 METRICOOL_PUBLICATION_FORMAT = "%Y-%m-%d %H:%M:%S"
 TIKTOK_DAILY_POST_CAP_NOTE = "TikTok auto-publish disabled to stay under the daily TikTok API post cap."
-DAILY_POSTING_SLOTS = (
-    time(7, 30),
-    time(9, 0),
-    time(10, 30),
-    time(12, 0),
-    time(13, 30),
-    time(15, 0),
-    time(16, 30),
-    time(18, 0),
-    time(19, 30),
-    time(21, 0),
-    time(22, 30),
-)
+DEFAULT_DAILY_POSTING_SLOTS = (time(9, 0), time(18, 0))
 
 
 def normalize_channel(value: object) -> str:
@@ -195,6 +183,7 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "metricool_facebook_link_url": first_payload.get("facebook_link_url"),
         "metricool_comment_keyword": first_payload.get("comment_keyword"),
         "metricool_manychat_reply": first_payload.get("manychat_reply"),
+        "metricool_history_id": first_payload.get("history_id"),
         "metricool_tiktok_enabled_count": sum(1 for payload in batch.metricool_payloads if payload.get("tiktok")),
         "metricool_tiktok_suppressed_count": sum(
             1 for payload in batch.metricool_payloads if payload.get("tiktok_throttle_reason")
@@ -233,6 +222,7 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
         "facebook_link_url",
         "comment_keyword",
         "manychat_reply",
+        "history_id",
         "tiktok_daily_post_cap",
         "tiktok_throttle_reason",
     )
@@ -358,10 +348,11 @@ def default_metricool_publication_times(
     publication_times: list[str] = []
     day_offset = 0
     start_date = minimum_time.date()
+    posting_slots = _configured_daily_posting_slots()
 
     while len(publication_times) < count:
         candidate_date = start_date + timedelta(days=day_offset)
-        for slot in DAILY_POSTING_SLOTS:
+        for slot in posting_slots:
             candidate = datetime.combine(candidate_date, slot, tzinfo=POSTING_TIMEZONE)
             if candidate >= minimum_time:
                 publication_times.append(candidate.strftime("%Y-%m-%d %H:%M:%S"))
@@ -370,6 +361,29 @@ def default_metricool_publication_times(
         day_offset += 1
 
     return publication_times
+
+
+def _configured_daily_posting_slots() -> tuple[time, ...]:
+    settings = get_settings()
+    configured_slots = [
+        _parse_posting_time(settings.metricool_morning_post_time),
+        _parse_posting_time(settings.metricool_evening_post_time),
+    ]
+    slots = tuple(sorted({slot for slot in configured_slots if slot is not None}))
+    if not slots:
+        slots = DEFAULT_DAILY_POSTING_SLOTS
+    daily_limit = max(1, min(int(settings.metricool_daily_post_limit or 2), 2, len(slots)))
+    return slots[:daily_limit]
+
+
+def _parse_posting_time(value: str | None) -> time | None:
+    if not value:
+        return None
+    try:
+        hour, minute = value.strip().split(":", maxsplit=1)
+        return time(int(hour), int(minute))
+    except (TypeError, ValueError):
+        return None
 
 
 def _coerce_metricool_schedule_start(value: str | datetime | None) -> datetime | None:

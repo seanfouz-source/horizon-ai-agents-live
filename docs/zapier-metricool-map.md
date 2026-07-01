@@ -80,10 +80,13 @@ Body:
 ```json
 {
   "promote_all_inventory": true,
-  "query": "all phones",
+  "query": "all inventory",
   "max_products_per_run": 50,
   "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
   "brand_name": "Horizon Wireless",
+  "sale_name": "Horizon Wireless Summer Sale",
+  "store_url": "https://www.ebay.com/str/exactspec",
+  "sale_media_url": "https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg",
   "as_draft": false,
   "auto_publish": true
 }
@@ -111,10 +114,11 @@ https://YOUR-PUBLIC-URL/media/campaigns/wholesale.mp4
 https://YOUR-PUBLIC-URL/media/campaigns/ebay-retail-store.mp4
 ```
 
-When `publish_after` is omitted, the agent staggers posts throughout every day
-in Central time: 07:30, 09:00, 10:30, 12:00, 13:30, 15:00, 16:30, 18:00,
-19:30, 21:00, and 22:30. If more posts are generated than slots left today,
-the schedule continues on the next day.
+When `publish_after` is omitted, the agent schedules at most two Metricool posts
+per calendar day in Central time. The default slots are 09:00 and 18:00, and
+they can be changed with `METRICOOL_MORNING_POST_TIME` and
+`METRICOOL_EVENING_POST_TIME`. If more than two posts are generated, the
+schedule continues on the next day.
 
 When `publish_after` is provided, treat it as the earliest start time, not as a
 single publication time for every eBay listing. The app still spreads the
@@ -175,9 +179,11 @@ Each item in `metricool_payloads` maps to one Metricool `Schedule Post` action,
 but the most reliable Zapier setup is to add `Looping by Zapier` after this
 webhook and loop over the `metricool_*_items` arrays, plus
 `publicationDate_items` and `draft_items` for Metricool's required internal
-fields. The flat `metricool_*` fields intentionally contain only the first post
-for quick single-product tests; using only those flat fields will schedule only
-one item.
+fields. The app records emitted payloads in local post history before returning
+them, so a Zapier retry or manual rerun does not produce duplicate posts for the
+same item inside the default 14-day cooldown. The flat `metricool_*` fields
+intentionally contain only the first post for quick single-product tests; using
+only those flat fields will schedule only one item.
 
 ## Metricool Schedule Post Mapping
 
@@ -223,11 +229,15 @@ Auto publish -> metricool_auto_publish_items
 Post type -> metricool_post_type_items
 ```
 
+Metricool should remain the public scheduler. Do not add direct Facebook,
+Instagram, TikTok, or LinkedIn posting actions after this webhook.
+
 For Facebook eBay product posts, keep the eBay URL in the caption and map any
 Metricool link/URL field that Zapier exposes to `metricool_link_url` or the
-current loop item's `link_url`. The generated caption also ends with its own
-`Buy on eBay: https://www.ebay.com/itm/...` line so Facebook has a visible
-purchase link even when a separate link field is unavailable.
+current loop item's `link_url`. The generated Summer Sale caption includes the
+store page and ends with its own `View this listing:
+https://www.ebay.com/itm/...` line so Facebook has a visible purchase link even
+when a separate link field is unavailable.
 
 If the Metricool Zap action exposes Facebook Group destination fields, map:
 

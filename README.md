@@ -4,7 +4,7 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 
 ## What It Does
 
-- Imports current eBay listings into a local inventory database.
+- Imports current active eBay listings into a local inventory database through the eBay API.
 - Answers customer questions with an OpenAI-powered inventory agent.
 - Returns Manychat Dynamic Block responses for Facebook and Instagram automations.
 - Gives Zapier webhook endpoints for customer Q&A and social post generation.
@@ -50,8 +50,8 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 - `GET /inventory/search?q=keyboard` searches stock.
 - `POST /inventory/import` imports JSON inventory items.
 - `POST /inventory/import/ebay-store-page` imports public listing cards from an eBay store URL.
-- `POST /inventory/sync/store-page` refreshes from the configured default eBay store URL.
-- `POST /inventory/sync/ebay` syncs from eBay Inventory API when `EBAY_ACCESS_TOKEN` is set.
+- `POST /inventory/sync/ebay` syncs active seller listings from the eBay API when `EBAY_ACCESS_TOKEN` is set.
+- `POST /inventory/sync/store-page` refreshes from the configured default eBay store URL only as a fallback.
 - `POST /webhooks/manychat` answers Manychat Dynamic Block or External Request calls.
 - `POST /webhooks/zapier/customer-question` returns a JSON answer for Zapier.
 - `POST /webhooks/zapier/social-drafts` creates Facebook, Instagram, and TikTok post drafts.
@@ -132,29 +132,35 @@ Example social draft request:
 ```json
 {
   "promote_all_inventory": true,
-  "query": "all phones",
+  "query": "all inventory",
   "max_products_per_run": 50,
   "platforms": ["facebook", "instagram", "tiktok", "linkedin"],
   "tiktok_daily_post_cap": 3,
   "brand_name": "Horizon Wireless",
+  "sale_name": "Horizon Wireless Summer Sale",
+  "store_url": "https://www.ebay.com/str/exactspec",
+  "sale_media_url": "https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg",
   "as_draft": false,
   "auto_publish": true
 }
 ```
 
 When `promote_all_inventory` is true, the app creates one Metricool payload per
-in-stock listing. By default each payload cross-posts to every requested
-platform, so 18 in-stock phones produce 18 scheduled Metricool posts instead of
-only the first phone. The app staggers those posts across the daily schedule,
-including Saturday and Sunday. When auto-publishing, TikTok is capped at
-`tiktok_daily_post_cap` placements per scheduled day so TikTok's API does not
-reject the run for too many automated posts; Facebook, Instagram, and LinkedIn
-continue receiving the full queue. Product captions end with a visible `Buy on eBay:` line,
-and the Zapier response also includes `metricool_link_url` fields for Metricool
-link/URL mappings when that field is available. For Metricool's required
-`Publication Date/Time` and `As draft` fields, the response includes both the
-readable `metricool_publication_date_time` / `metricool_as_draft` fields and
-Zapier's internal `publicationDate` / `draft` aliases.
+eligible active eBay listing, using the eBay store's July Summer Sale banner as
+the default campaign media. If `sale_media_url` and `media_url` are omitted, the
+app falls back to the selected eBay product image when available. Metricool remains the public social scheduler; the app only prepares
+Metricool-ready payloads and records local scheduling history to prevent reruns
+from duplicating posts. The hard default cap is 2 Metricool posts per calendar
+day total, using `METRICOOL_MORNING_POST_TIME` and
+`METRICOOL_EVENING_POST_TIME`. Items are not reposted within
+`METRICOOL_REPOST_COOLDOWN_DAYS` by default. Summer Sale product captions include
+the eBay store page plus a visible `View this listing:` eBay item link, and the
+Zapier response also includes
+`metricool_link_url` fields for Metricool link/URL mappings when that field is
+available. For Metricool's required `Publication Date/Time` and `As draft`
+fields, the response includes both the readable
+`metricool_publication_date_time` / `metricool_as_draft` fields and Zapier's
+internal `publicationDate` / `draft` aliases.
 
 ## eBay Inventory
 
@@ -170,11 +176,17 @@ sku,title,description,condition,price,currency,quantity,ebay_item_id,ebay_url,im
 {"Brand":"Sony","Color":"Black","Size":"Large"}
 ```
 
-Live sync uses the eBay Sell Inventory API and needs `EBAY_ACCESS_TOKEN`. The service fetches inventory items and offers, then stores SKU, title, quantity, image, price, and eBay listing URL when available.
+Live sync needs `EBAY_ACCESS_TOKEN`. The service tries the eBay Sell Inventory
+API first, then falls back to the eBay Buy Browse API seller search/details
+endpoint when Seller Hub listings are not represented as Sell Inventory records.
+It stores active, available listings only: item ID, title, URL, price,
+condition, quantity, category, listing status, best image URL, all returned
+image URLs, short description, and item specifics.
 
 ## eBay Store URL Workaround
 
-Until official eBay API access is ready, the app treats the ExactSpec public store page as the default inventory source:
+The app now uses the eBay API as the default inventory source. The ExactSpec
+public store page remains configured only as a fallback:
 
 ```text
 https://www.ebay.com/str/exactspec

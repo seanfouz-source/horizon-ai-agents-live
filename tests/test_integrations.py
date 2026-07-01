@@ -380,7 +380,7 @@ def test_default_metricool_publication_time_uses_next_daily_slot():
     central = ZoneInfo("America/Chicago")
     now = datetime(2026, 5, 26, 9, 0, tzinfo=central)
 
-    assert default_metricool_publication_time(now) == "2026-05-26 10:30:00"
+    assert default_metricool_publication_time(now) == "2026-05-26 18:00:00"
 
 
 def test_default_metricool_publication_time_uses_evening_and_weekend_slots():
@@ -395,9 +395,9 @@ def test_default_metricool_publication_times_continue_into_saturday():
     now = datetime(2026, 5, 29, 22, 45, tzinfo=central)
 
     assert default_metricool_publication_times(3, now) == [
-        "2026-05-30 07:30:00",
         "2026-05-30 09:00:00",
-        "2026-05-30 10:30:00",
+        "2026-05-30 18:00:00",
+        "2026-05-31 09:00:00",
     ]
 
 
@@ -407,8 +407,8 @@ def test_default_metricool_publication_times_can_start_on_sunday():
 
     assert default_metricool_publication_times(3, now, start_at="2026-05-31 08:00:00") == [
         "2026-05-31 09:00:00",
-        "2026-05-31 10:30:00",
-        "2026-05-31 12:00:00",
+        "2026-05-31 18:00:00",
+        "2026-06-01 09:00:00",
     ]
 
 
@@ -417,9 +417,9 @@ def test_default_metricool_publication_times_stagger_across_the_day():
     now = datetime(2026, 5, 26, 7, 0, tzinfo=central)
 
     assert default_metricool_publication_times(5, now) == [
-        "2026-05-26 07:30:00",
         "2026-05-26 09:00:00",
-        "2026-05-26 10:30:00",
-        "2026-05-26 12:00:00",
-        "2026-05-26 13:30:00",
+        "2026-05-26 18:00:00",
+        "2026-05-27 09:00:00",
+        "2026-05-27 18:00:00",
+        "2026-05-28 09:00:00",
     ]

@@ -82,7 +82,15 @@ Body:
 2. Add a Dynamic Block named `Ask Horizon Inventory Agent`.
 3. Send the body above.
 4. Add a fallback block that says a human will follow up if the external request fails.
-5. Test with one phrase, such as `Do you have a blue switch keyboard?`
+5. Test with one phrase, such as `Do you have any Samsung phones?`
+
+The response is grounded in active eBay API inventory. It returns one matching
+listing for specific questions, up to three active listings for general product
+questions, and the fallback store link when the app cannot match the request:
+
+```text
+https://ebay.us/m/GDmaKw
+```
 
 ## Platform Notes
 

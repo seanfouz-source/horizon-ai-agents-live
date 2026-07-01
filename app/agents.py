@@ -1,13 +1,21 @@
 import json
+import logging
 import re
+from datetime import datetime, timedelta
 from typing import cast
 
 from agents import Agent, Runner, function_tool
 
 from app.campaigns import request_campaign_media_url
 from app.config import get_settings
-from app.integrations import apply_tiktok_daily_post_cap, default_metricool_publication_times, metricool_payload
+from app.integrations import (
+    METRICOOL_PUBLICATION_FORMAT,
+    apply_tiktok_daily_post_cap,
+    default_metricool_publication_times,
+    metricool_payload,
+)
 from app.inventory import InventoryRepository
+from app.metricool import scheduled_post_counts_by_day
 from app.models import (
     CustomerAnswer,
     CustomerQuestion,
@@ -28,6 +36,9 @@ from app.models import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def get_repository() -> InventoryRepository:
     settings = get_settings()
     return InventoryRepository(settings.resolved_database_path)
@@ -44,7 +55,9 @@ def _item_summary(item) -> dict[str, object]:
         "quantity": item.quantity,
         "ebay_url": item.ebay_url,
         "image_url": item.image_url,
+        "image_urls": item.image_urls,
         "category": item.category,
+        "listing_status": item.listing_status,
         "item_specifics": item.item_specifics,
     }
 
@@ -124,14 +137,21 @@ def _candidate_inventory_queries(message: str) -> list[str]:
 
 def _matched_items_for_message(message: str):
     repository = get_repository()
-    matched_items = repository.search(message, limit=3)
+    matched_items = [item for item in repository.search(message, limit=3) if _is_active_inventory_answer_item(item)]
     if matched_items:
         return matched_items
     for query in _candidate_inventory_queries(message):
-        matched_items = repository.search(query, limit=3)
+        matched_items = [item for item in repository.search(query, limit=3) if _is_active_inventory_answer_item(item)]
         if matched_items:
             return matched_items
     return []
+
+
+def _is_active_inventory_answer_item(item: InventoryItem) -> bool:
+    if item.quantity <= 0:
+        return False
+    status = (item.listing_status or "ACTIVE").strip().upper()
+    return status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"}
 
 
 CUSTOMER_AGENT_INSTRUCTIONS = """
@@ -211,32 +231,90 @@ def _group_outreach_agent() -> Agent:
 
 
 async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer:
-    context = {
-        "channel": question.channel,
-        "user_id": question.user_id,
-        "first_name": question.first_name,
-        "message": question.message,
-        "metadata": question.metadata,
-    }
-    prompt = (
-        "Answer this shopper using current inventory only.\n"
-        f"{json.dumps(context, indent=2)}"
-    )
-    result = await Runner.run(_customer_agent(), prompt, max_turns=5)
     matched_items = _matched_items_for_message(question.message)
-    reply = str(result.final_output).strip()
-    mentioned_items = _matched_items_from_reply(reply)
-    if mentioned_items:
-        matched_items = mentioned_items
-    elif _reply_indicates_no_inventory_match(reply):
-        matched_items = []
-    needs_human = any(keyword in question.message.lower() for keyword in ["refund", "return", "order", "tracking", "complaint"])
+    needs_human = _customer_needs_human(question.message)
+    if matched_items and not needs_human:
+        reply = _manychat_inventory_reply(question.message, matched_items)
+    elif matched_items:
+        reply = (
+            "I can help with the product info, and a team member should review the order/account part.\n\n"
+            + _manychat_inventory_reply(question.message, matched_items)
+        )
+    else:
+        reply = (
+            "I don't see an exact match in our active eBay inventory right now. "
+            "You can browse current listings here: "
+            f"{get_settings().ebay_store_backup_url or get_settings().ebay_store_url}\n\n"
+            "A team member can help if you want a similar option."
+        )
+        needs_human = True
+    logger.info(
+        "ManyChat inventory reply matched %s item(s); needs_human=%s.",
+        len(matched_items),
+        needs_human,
+    )
     return CustomerAnswer(
         reply=reply,
         channel=question.channel,
         matched_items=matched_items,
         needs_human=needs_human,
     )
+
+
+def _customer_needs_human(message: str) -> bool:
+    normalized = message.lower()
+    return any(keyword in normalized for keyword in ["refund", "return", "order", "tracking", "complaint", "warranty"])
+
+
+def _manychat_inventory_reply(message: str, matched_items: list[InventoryItem]) -> str:
+    items_to_send = matched_items[:3] if _message_requests_multiple_options(message) else matched_items[:1]
+    if len(items_to_send) == 1:
+        item = items_to_send[0]
+        return (
+            "Yes, this item is currently available.\n\n"
+            f"{item.title}\n"
+            f"Condition: {item.condition or 'See eBay listing'}\n"
+            f"Price: {_manychat_price(item)}\n\n"
+            f"You can view or buy it here: {_buy_url_for_item(item)}"
+        )
+
+    lines = ["Here are a few active listings that match:"]
+    for item in items_to_send:
+        lines.append(
+            "\n"
+            f"{item.title}\n"
+            f"Condition: {item.condition or 'See eBay listing'}\n"
+            f"Price: {_manychat_price(item)}\n"
+            f"Link: {_buy_url_for_item(item)}"
+        )
+    return "\n".join(lines)
+
+
+def _message_requests_multiple_options(message: str) -> bool:
+    normalized = message.lower()
+    return any(
+        phrase in normalized
+        for phrase in (
+            "do you have",
+            "what do you have",
+            "show me",
+            "options",
+            "any",
+            "iphones",
+            "phones",
+            "tablets",
+            "watches",
+            "computers",
+        )
+    )
+
+
+def _manychat_price(item: InventoryItem) -> str:
+    if item.price is None:
+        return "See eBay listing"
+    if float(item.price).is_integer():
+        return f"${int(item.price)}"
+    return f"${item.price:.2f}"
 
 
 def _matched_items_from_reply(reply: str):
@@ -276,8 +354,9 @@ def _reply_indicates_no_inventory_match(reply: str) -> bool:
 
 async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
     if request.promote_all_inventory:
-        return _create_all_inventory_social_drafts(request)
+        return await _create_all_inventory_social_drafts(request)
 
+    repository = get_repository()
     campaign_media_url = request_campaign_media_url(request)
     prompt = (
         "Create social drafts for this eBay promotion request.\n"
@@ -306,11 +385,11 @@ async def create_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
         for post in batch.posts:
             post.media_url = campaign_media_url
     if batch.posts:
-        default_schedule = default_metricool_publication_times(len(batch.posts), start_at=request.publish_after)
-        for post, publication_time in zip(batch.posts, default_schedule, strict=False):
-            post.suggested_schedule = publication_time
+        metricool_counts = await _metricool_existing_counts(len(batch.posts), request)
+        batch.posts = _schedule_metricool_posts(repository, batch.posts, request, metricool_counts)
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     _apply_tiktok_cap_to_batch(batch, request.tiktok_daily_post_cap)
+    _record_metricool_payloads(repository, batch.posts, batch.metricool_payloads)
     return batch
 
 
@@ -349,10 +428,6 @@ def create_slow_mover_outreach(request: SlowMoverOutreachRequest) -> SlowMoverOu
         )
         posts.extend(item_posts)
 
-    schedule = default_metricool_publication_times(len(posts), start_at=request.publish_after)
-    for post, publication_time in zip(posts, schedule, strict=False):
-        post.suggested_schedule = publication_time
-
     social_request = SocialDraftRequest(
         brand_name=request.brand_name,
         platforms=request.platforms,
@@ -363,11 +438,13 @@ def create_slow_mover_outreach(request: SlowMoverOutreachRequest) -> SlowMoverOu
         as_draft=request.as_draft,
         auto_publish=request.auto_publish,
     )
+    posts = _schedule_metricool_posts(repository, posts, social_request)
     metricool_payloads = [metricool_payload(post, social_request) for post in posts]
     suppressed_tiktok = apply_tiktok_daily_post_cap(metricool_payloads, request.tiktok_daily_post_cap)
     for payload, post in zip(metricool_payloads, posts, strict=False):
         payload["comment_keyword"] = _comment_keyword_for_sku(post.product_sku)
         payload["manychat_reply"] = _slow_mover_manychat_reply_from_post(post)
+    _record_metricool_payloads(repository, posts, metricool_payloads)
 
     return SlowMoverOutreachPlan(
         campaign_name="Slow-mover social outreach",
@@ -539,7 +616,7 @@ def _slow_mover_manychat_reply_from_post(post: SocialPost) -> str:
     return f"Here is the eBay link for {title}: {url}"
 
 
-def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
+async def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDraftBatch:
     repository = get_repository()
     items = _inventory_items_for_daily_promotion(repository, request)
     if not items:
@@ -562,21 +639,166 @@ def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> SocialDr
             for platform in request.platforms:
                 posts.append(_inventory_social_post(item, request, platform=platform, media_url=campaign_media_url))
 
-    default_schedule = default_metricool_publication_times(len(posts), start_at=request.publish_after)
-    for post, publication_time in zip(posts, default_schedule, strict=False):
-        post.suggested_schedule = publication_time
+    metricool_counts = await _metricool_existing_counts(len(posts), request)
+    posts = _schedule_metricool_posts(repository, posts, request, metricool_counts)
 
     batch = SocialDraftBatch(
-        campaign_name="Daily all-inventory promotion",
+        campaign_name=_inventory_campaign_name(request),
         posts=posts,
         notes=(
-            f"Generated {len(posts)} scheduled post payloads from {len(items)} in-stock inventory items. "
-            "Use the metricool_*_items fields or loop over metricool_payloads in Zapier to schedule every item."
+            f"Generated {len(posts)} scheduled Summer Sale post payloads from {len(items)} in-stock inventory items. "
+            "Use the metricool_*_items fields or loop over metricool_payloads in Zapier to schedule every item "
+            "at the two-posts-per-day Metricool cadence."
         ),
     )
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
     _apply_tiktok_cap_to_batch(batch, request.tiktok_daily_post_cap)
+    _record_metricool_payloads(repository, batch.posts, batch.metricool_payloads)
     return batch
+
+
+def _schedule_metricool_posts(
+    repository: InventoryRepository,
+    posts: list[SocialPost],
+    request: SocialDraftRequest,
+    external_daily_counts: dict[str, int] | None = None,
+) -> list[SocialPost]:
+    if not posts:
+        return []
+
+    if not _repository_supports_post_history(repository):
+        default_schedule = default_metricool_publication_times(len(posts), start_at=request.publish_after)
+        for post, publication_time in zip(posts, default_schedule, strict=False):
+            post.suggested_schedule = publication_time
+        return posts
+
+    schedule = _available_metricool_publication_times(
+        repository,
+        len(posts),
+        request.publish_after,
+        external_daily_counts or {},
+    )
+    scheduled_posts = posts[: len(schedule)]
+    for post, publication_time in zip(scheduled_posts, schedule, strict=False):
+        post.suggested_schedule = publication_time
+    return scheduled_posts
+
+
+def _available_metricool_publication_times(
+    repository: InventoryRepository,
+    count: int,
+    start_at: str | None,
+    external_daily_counts: dict[str, int],
+) -> list[str]:
+    if count <= 0:
+        return []
+
+    daily_limit = _metricool_daily_post_limit()
+    publication_times: list[str] = []
+    daily_counts: dict[str, int] = {}
+    probe_start = start_at
+
+    for _ in range(370):
+        candidates = default_metricool_publication_times(max(count * 3, 8), start_at=probe_start)
+        if not candidates:
+            break
+
+        for candidate in candidates:
+            scheduled_day = candidate[:10]
+            if scheduled_day not in daily_counts:
+                daily_counts[scheduled_day] = max(
+                    repository.social_post_count_for_day(scheduled_day),
+                    external_daily_counts.get(scheduled_day, 0),
+                )
+            if daily_counts[scheduled_day] >= daily_limit:
+                continue
+            publication_times.append(candidate)
+            daily_counts[scheduled_day] += 1
+            if len(publication_times) == count:
+                return publication_times
+
+        last_candidate = datetime.strptime(candidates[-1], METRICOOL_PUBLICATION_FORMAT)
+        next_day = (last_candidate + timedelta(days=1)).date().isoformat()
+        probe_start = f"{next_day} 00:00:00"
+
+    return publication_times
+
+
+async def _metricool_existing_counts(
+    post_count: int,
+    request: SocialDraftRequest,
+) -> dict[str, int]:
+    lookahead_days = max(7, (post_count // _metricool_daily_post_limit()) + 3)
+    return await scheduled_post_counts_by_day(start_at=request.publish_after, days=lookahead_days)
+
+
+def _metricool_daily_post_limit() -> int:
+    settings = get_settings()
+    return max(1, min(int(settings.metricool_daily_post_limit or 2), 2))
+
+
+def _record_metricool_payloads(
+    repository: InventoryRepository,
+    posts: list[SocialPost],
+    payloads: list[dict[str, object]],
+) -> None:
+    if not _repository_supports_post_history(repository):
+        return
+
+    for post, payload in zip(posts, payloads, strict=False):
+        scheduled_at = payload.get("publication_date_time") or payload.get("publicationDate")
+        if not isinstance(scheduled_at, str) or not scheduled_at:
+            continue
+        history_id = repository.record_social_post(
+            ebay_item_id=_post_ebay_item_id(post),
+            sku=post.product_sku,
+            title=post.product_title or "Horizon Wireless eBay listing",
+            item_url=post.ebay_url,
+            image_url=str(payload.get("media_01") or post.media_url or ""),
+            caption=post.text,
+            scheduled_at=scheduled_at,
+            platform=_metricool_platform_label(payload),
+            metricool_post_id=str(payload.get("metricool_post_id") or "") or None,
+            status="scheduled",
+        )
+        payload["history_id"] = history_id
+        logger.info(
+            "Reserved Metricool payload for eBay item %s at %s on %s.",
+            _post_ebay_item_id(post) or post.product_sku,
+            scheduled_at,
+            _metricool_platform_label(payload),
+        )
+
+
+def _repository_supports_post_history(repository: object) -> bool:
+    return all(
+        callable(getattr(repository, method, None))
+        for method in (
+            "social_post_count_for_day",
+            "recently_promoted_ebay_item_ids",
+            "last_social_post_at_by_ebay_item_id",
+            "record_social_post",
+        )
+    )
+
+
+def _metricool_platform_label(payload: dict[str, object]) -> str:
+    platforms = [
+        platform
+        for platform in ("facebook", "instagram", "tiktok", "linkedin")
+        if payload.get(platform)
+    ]
+    return ",".join(platforms) if platforms else "unknown"
+
+
+def _post_ebay_item_id(post: SocialPost) -> str | None:
+    if post.ebay_url:
+        match = re.search(r"/itm/(?:[^/?#]+/)?(\d+)", post.ebay_url)
+        if match:
+            return match.group(1)
+    if post.product_sku and post.product_sku.startswith("EBAY-"):
+        return post.product_sku.removeprefix("EBAY-")
+    return post.product_sku
 
 
 def _apply_tiktok_cap_to_batch(batch: SocialDraftBatch, daily_cap: int) -> None:
@@ -595,20 +817,81 @@ def _tiktok_cap_note(suppressed_count: int, daily_cap: int) -> str:
 
 
 def _inventory_items_for_daily_promotion(repository: InventoryRepository, request: SocialDraftRequest) -> list[InventoryItem]:
+    candidate_limit = max(request.max_products_per_run * 4, request.max_products_per_run + 10)
     if request.sku:
         item = repository.get(request.sku)
-        return [item] if item and item.quantity > 0 else []
+        candidates = [item] if item and _is_active_promotable_item(item) and _is_ebay_listing(item) else []
+        return _rotate_inventory_items(repository, candidates, request.max_products_per_run)
     query = request.query.strip().lower() if request.query else ""
     if query in {"all phones", "phones"}:
-        phone_candidate_limit = max(request.max_products_per_run * 4, request.max_products_per_run + 10)
-        return [
+        candidates = [
             item
-            for item in repository.all_promotable(limit=phone_candidate_limit)
-            if _looks_like_phone(item)
-        ][: request.max_products_per_run]
+            for item in repository.all_promotable(limit=candidate_limit)
+            if _is_ebay_listing(item) and _looks_like_phone(item)
+        ]
+        return _rotate_inventory_items(repository, candidates, request.max_products_per_run)
     if query and query not in {"all", "all inventory", "daily inventory"}:
-        return repository.search(request.query, limit=request.max_products_per_run)
-    return repository.all_promotable(limit=request.max_products_per_run)
+        candidates = [item for item in repository.search(request.query, limit=candidate_limit) if _is_ebay_listing(item)]
+        return _rotate_inventory_items(repository, candidates, request.max_products_per_run)
+    return _rotate_inventory_items(
+        repository,
+        [item for item in repository.all_promotable(limit=candidate_limit) if _is_ebay_listing(item)],
+        request.max_products_per_run,
+    )
+
+
+def _rotate_inventory_items(
+    repository: InventoryRepository,
+    items: list[InventoryItem],
+    limit: int,
+) -> list[InventoryItem]:
+    active_items = [item for item in items if _is_active_promotable_item(item)]
+    if not _repository_supports_post_history(repository):
+        return active_items[:limit]
+
+    settings = get_settings()
+    recent_item_ids = repository.recently_promoted_ebay_item_ids(settings.metricool_repost_cooldown_days)
+    last_posted_at = repository.last_social_post_at_by_ebay_item_id()
+
+    eligible_items = [
+        item
+        for item in active_items
+        if (_item_ebay_item_id(item) not in recent_item_ids)
+    ]
+    if not eligible_items:
+        return []
+
+    return sorted(
+        eligible_items,
+        key=lambda item: last_posted_at.get(_item_ebay_item_id(item) or "", ""),
+    )[:limit]
+
+
+def _is_active_promotable_item(item: InventoryItem) -> bool:
+    if item.quantity <= 0:
+        return False
+    if not item.image_url:
+        return False
+    status = (item.listing_status or "ACTIVE").strip().upper()
+    return status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"}
+
+
+def _is_ebay_listing(item: InventoryItem) -> bool:
+    if item.source.startswith("ebay-"):
+        return True
+    return item.sku.startswith("EBAY-")
+
+
+def _item_ebay_item_id(item: InventoryItem) -> str | None:
+    if item.ebay_item_id:
+        return item.ebay_item_id
+    if item.ebay_url:
+        match = re.search(r"/itm/(?:[^/?#]+/)?(\d+)", item.ebay_url)
+        if match:
+            return match.group(1)
+    if item.sku.startswith("EBAY-"):
+        return item.sku.removeprefix("EBAY-")
+    return None
 
 
 def _looks_like_phone(item: InventoryItem) -> bool:
@@ -635,30 +918,48 @@ def _inventory_social_post(
         product_sku=item.sku,
         product_title=item.title,
         ebay_url=_buy_url_for_item(item),
-        media_url=media_url or request.media_url,
+        media_url=media_url or request.media_url or _sale_media_url_for_request(request) or item.image_url,
         hashtags=_hashtags_for_item(item),
     )
 
 
 def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
     brand = request.brand_name or "Horizon Wireless"
-    price = _price_text(item)
-    condition = f" Condition: {item.condition}." if item.condition else ""
+    sale_name = (request.sale_name or f"{brand} eBay Store Sale").strip()
+    store_url = _store_url_for_request(request)
+    price = f"Price: ${item.price:,.2f}" if item.price is not None else "Price: See eBay listing"
+    condition = f"Condition: {item.condition}" if item.condition else "Condition: See eBay listing"
     url = _buy_url_for_item(item)
     title = item.title.strip()
-    buy_line = f"Buy on eBay: {url}"
-    if request.cross_post_to_all_platforms:
-        return (
-            f"{brand} listing update: {title}.{price}{condition}\n"
-            f"{buy_line}"
-        )
-    if platform == "instagram":
-        return f"Now listed at {brand}: {title}.{price}{condition}\n{buy_line}"
-    if platform == "tiktok":
-        return f"{title} is live in the {brand} eBay store.{price}{condition}\n{buy_line}"
-    if platform == "linkedin":
-        return f"{brand} inventory update: {title}.{price}{condition}\n{buy_line}"
-    return f"{title} is available now from {brand}.{price}{condition}\n{buy_line}"
+    return (
+        f"{sale_name} spotlight: {title}\n\n"
+        f"{condition}\n"
+        f"{price}\n\n"
+        f"Shop the full {brand} sale on our eBay store: {store_url}\n"
+        f"View this listing: {url}"
+    )
+
+
+def _inventory_campaign_name(request: SocialDraftRequest) -> str:
+    sale_name = (request.sale_name or "").strip()
+    if sale_name:
+        return f"{sale_name} inventory promotion"
+    brand = request.brand_name or "Horizon Wireless"
+    return f"{brand} inventory promotion"
+
+
+def _store_url_for_request(request: SocialDraftRequest) -> str:
+    configured = (request.store_url or "").strip()
+    if configured:
+        return configured
+    return get_settings().ebay_store_url
+
+
+def _sale_media_url_for_request(request: SocialDraftRequest) -> str | None:
+    configured = (request.sale_media_url or "").strip()
+    if configured:
+        return configured
+    return get_settings().ebay_store_sale_media_url
 
 
 def _buy_url_for_item(item: InventoryItem) -> str:

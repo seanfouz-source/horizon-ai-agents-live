@@ -6,7 +6,7 @@ import json
 import logging
 import secrets
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html import escape
 from typing import Any
 from urllib.parse import urlencode
@@ -30,6 +30,7 @@ from app.inventory_seed import seed_inventory_if_empty
 from app.media import product_card_for_item, product_card_jpeg_for_item
 from app.models import (
     CustomerQuestion,
+    CustomerAnswer,
     EbayStoreImportRequest,
     GroupOutreachRequest,
     GroupReplyRequest,
@@ -64,6 +65,13 @@ GMAIL_OAUTH_STATE_MAX_AGE_SECONDS = 15 * 60
 settings = get_settings()
 repository = InventoryRepository(settings.resolved_database_path)
 store_syncer = StorePageSyncer(settings, repository)
+ebay_sync_status: dict[str, Any] = {
+    "source": "ebay-api",
+    "status": "not_run",
+    "imported": 0,
+    "message": "eBay API sync has not run yet.",
+    "last_attempt_at": None,
+}
 app = FastAPI(title=settings.app_name)
 logger = logging.getLogger(__name__)
 
@@ -78,7 +86,12 @@ def verify_secret(x_horizon_secret: str | None, query_secret: str | None = None)
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "service": settings.app_name, "store_sync": store_syncer.last_status}
+    return {
+        "status": "ok",
+        "service": settings.app_name,
+        "ebay_sync": ebay_sync_status,
+        "store_sync": store_syncer.last_status,
+    }
 
 
 @app.get("/gmail/oauth/start")
@@ -145,10 +158,57 @@ def gmail_oauth_callback(
 
 
 @app.on_event("startup")
-async def startup_store_page_sync() -> None:
+async def startup_inventory_sync() -> None:
     seed_inventory_if_empty(repository, settings.seed_inventory_csv)
+    asyncio.create_task(_startup_inventory_refresh())
+
+
+async def _startup_inventory_refresh() -> None:
+    api_status: dict[str, Any] | None = None
+    if settings.sync_ebay_api_on_startup and settings.ebay_access_token:
+        api_status = await _sync_ebay_api_inventory()
+    if api_status and api_status.get("status") == "ok":
+        return
     if settings.sync_store_page_on_startup:
-        asyncio.create_task(store_syncer.sync())
+        await store_syncer.sync()
+
+
+async def _sync_ebay_api_inventory() -> dict[str, Any]:
+    global ebay_sync_status
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    if not settings.ebay_access_token:
+        ebay_sync_status = {
+            "source": "ebay-api",
+            "status": "skipped",
+            "imported": 0,
+            "message": "EBAY_ACCESS_TOKEN is not configured.",
+            "last_attempt_at": attempted_at,
+        }
+        return ebay_sync_status
+
+    try:
+        client = EbayClient(settings)
+        items = await client.fetch_inventory_items()
+        count = repository.replace_ebay_inventory_snapshot(items)
+        ebay_sync_status = {
+            "source": "ebay-api",
+            "status": "ok" if count else "empty",
+            "imported": count,
+            "inventory_count": repository.count(),
+            "message": f"Imported {count} active eBay API listings.",
+            "last_attempt_at": attempted_at,
+        }
+    except Exception as exc:
+        logger.warning("eBay API inventory sync failed: %s", exc)
+        ebay_sync_status = {
+            "source": "ebay-api",
+            "status": "failed",
+            "imported": 0,
+            "inventory_count": repository.count(),
+            "message": f"eBay API sync failed with {exc.__class__.__name__}.",
+            "last_attempt_at": attempted_at,
+        }
+    return ebay_sync_status
 
 
 @app.get("/inventory/search", response_model=InventorySearchResult)
@@ -386,12 +446,9 @@ async def import_inventory(
 async def sync_ebay_inventory(
     request: Request,
     x_horizon_secret: str | None = Header(default=None),
-) -> dict[str, int]:
+) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
-    client = EbayClient(settings)
-    items = await client.fetch_inventory_items()
-    count = repository.upsert_items(items)
-    return {"synced": count}
+    return await _sync_ebay_api_inventory()
 
 
 @app.post("/inventory/sync/store-page")
@@ -461,6 +518,7 @@ async def manychat_webhook(
         metadata={key: str(value) for key, value in payload.items() if isinstance(value, (str, int, float, bool))},
     )
     answer = await answer_customer_question(question)
+    _log_customer_inquiry("manychat", message, answer)
     return manychat_dynamic_response(answer)
 
 
@@ -483,6 +541,7 @@ async def zapier_customer_question(
             metadata={key: str(value) for key, value in payload.items() if isinstance(value, (str, int, float, bool))},
         )
     )
+    _log_customer_inquiry("zapier_customer_question", message, answer)
     return answer.model_dump()
 
 
@@ -537,6 +596,7 @@ async def metricool_inbox_webhook(
             metadata={key: str(value) for key, value in payload.items() if isinstance(value, (str, int, float, bool))},
         )
     )
+    _log_customer_inquiry("metricool_inbox", message, answer)
     return {
         "reply": answer.reply,
         "needs_human": answer.needs_human,
@@ -569,6 +629,19 @@ async def parse_zapier_body(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Zapier payload must be a JSON object.")
 
     return payload
+
+
+def _log_customer_inquiry(source: str, message: str, answer: CustomerAnswer) -> None:
+    matched_item = answer.matched_items[0] if answer.matched_items else None
+    logger.info(
+        "%s inquiry handled: incoming=%r matched_ebay_item_id=%s response=%r product_url=%s needs_human=%s success=True",
+        source,
+        message[:500],
+        matched_item.ebay_item_id if matched_item else None,
+        answer.reply[:500],
+        matched_item.ebay_url if matched_item else None,
+        answer.needs_human,
+    )
 
 
 async def _build_daily_report(report_date: date | None = None) -> dict[str, Any]:

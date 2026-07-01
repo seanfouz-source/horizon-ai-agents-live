@@ -83,7 +83,7 @@ def test_slow_mover_outreach_prioritizes_metrics_and_builds_metricool_payloads(m
     assert first_payload["as_draft"] is False
     assert first_payload["auto_publish"] is True
     assert first_payload["comment_keyword"] == "LINKEBAY1"
-    assert first_payload["publication_date_time"] == "2026-05-29 10:30:00"
+    assert first_payload["publication_date_time"] == "2026-05-29 18:00:00"
 
 
 def test_zapier_slow_mover_response_adds_loop_fields(monkeypatch):

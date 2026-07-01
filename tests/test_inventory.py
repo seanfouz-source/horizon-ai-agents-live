@@ -20,3 +20,81 @@ def test_inventory_search_finds_item_specifics(tmp_path):
 
     assert len(results) == 1
     assert results[0].sku == "HZ-1"
+
+
+def test_inventory_persists_ebay_api_image_list_and_status(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku="EBAY-123",
+                title="Samsung Galaxy S25",
+                quantity=1,
+                ebay_item_id="123",
+                ebay_url="https://www.ebay.com/itm/123",
+                image_url="https://example.com/main.jpg",
+                image_urls=["https://example.com/main.jpg", "https://example.com/side.jpg"],
+                listing_status="ACTIVE",
+            )
+        ]
+    )
+
+    item = repository.get("EBAY-123")
+
+    assert item is not None
+    assert item.image_urls == ["https://example.com/main.jpg", "https://example.com/side.jpg"]
+    assert item.listing_status == "ACTIVE"
+
+
+def test_replace_ebay_inventory_snapshot_marks_missing_ebay_rows_inactive(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku="EBAY-OLD",
+                ebay_item_id="old",
+                title="Old eBay listing",
+                quantity=1,
+                ebay_url="https://www.ebay.com/itm/old",
+                image_url="https://example.com/old.jpg",
+                source="ebay-store-page",
+                listing_status="ACTIVE",
+            ),
+            InventoryItem(
+                sku="HZ-DEMO-001",
+                ebay_item_id="demo",
+                title="Demo item",
+                quantity=2,
+                image_url="https://example.com/demo.jpg",
+                source="csv",
+            ),
+        ]
+    )
+
+    repository.replace_ebay_inventory_snapshot(
+        [
+            InventoryItem(
+                sku="EBAY-CURRENT",
+                ebay_item_id="current",
+                title="Current eBay listing",
+                quantity=1,
+                ebay_url="https://www.ebay.com/itm/current",
+                image_url="https://example.com/current.jpg",
+                source="ebay-browse-api",
+                listing_status="IN_STOCK",
+            )
+        ]
+    )
+
+    old_item = repository.get("EBAY-OLD")
+    current_item = repository.get("EBAY-CURRENT")
+    demo_item = repository.get("HZ-DEMO-001")
+
+    assert old_item is not None
+    assert old_item.quantity == 0
+    assert old_item.listing_status == "ENDED"
+    assert current_item is not None
+    assert current_item.quantity == 1
+    assert current_item.listing_status == "IN_STOCK"
+    assert demo_item is not None
+    assert demo_item.quantity == 2

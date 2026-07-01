@@ -19,6 +19,14 @@ services:
         value: https://www.ebay.com/str/exactspec
       - key: EBAY_STORE_BACKUP_URL
         value: https://ebay.us/m/GDmaKw
+      - key: EBAY_STORE_SALE_MEDIA_URL
+        value: https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg
+      - key: EBAY_SELLER_USERNAME
+        value: exactspec-electronics
+      - key: EBAY_BROWSE_SEARCH_QUERY
+        value: " "
+      - key: SYNC_EBAY_API_ON_STARTUP
+        value: "true"
       - key: SYNC_STORE_PAGE_ON_STARTUP
         value: "true"
       - key: OPENAI_API_KEY
@@ -27,6 +35,16 @@ services:
         sync: false
       - key: MANYCHAT_API_TOKEN
         sync: false
+      - key: EBAY_ACCESS_TOKEN
+        sync: false
+      - key: METRICOOL_DAILY_POST_LIMIT
+        value: "2"
+      - key: METRICOOL_MORNING_POST_TIME
+        value: "09:00"
+      - key: METRICOOL_EVENING_POST_TIME
+        value: "18:00"
+      - key: METRICOOL_REPOST_COOLDOWN_DAYS
+        value: "14"
       - key: WEBHOOK_SHARED_SECRET
         generateValue: true
       - key: REPORT_EMAIL_PROVIDER

@@ -1,9 +1,15 @@
+import logging
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from app.config import Settings
 from app.models import InventoryItem
+
+
+logger = logging.getLogger(__name__)
 
 
 class EbayClient:
@@ -15,6 +21,25 @@ class EbayClient:
         self.settings = settings
 
     async def fetch_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
+        sell_inventory_items: list[InventoryItem] = []
+        try:
+            sell_inventory_items = await self._fetch_sell_inventory_items(limit=limit)
+        except httpx.HTTPError as exc:
+            logger.warning("eBay Sell Inventory API sync failed: %s", exc.__class__.__name__)
+
+        if sell_inventory_items:
+            return sell_inventory_items
+
+        seller_username = getattr(self.settings, "ebay_seller_username", None)
+        if not seller_username:
+            return []
+
+        browse_items = await self._fetch_browse_seller_items(seller_username, limit=limit)
+        if browse_items:
+            logger.info("Imported %s active eBay listings through Browse API.", len(browse_items))
+        return browse_items
+
+    async def _fetch_sell_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         items: list[InventoryItem] = []
         offset = 0
         page_size = max(1, min(limit, 200))
@@ -35,13 +60,71 @@ class EbayClient:
                 for raw_item in raw_items:
                     item = self._normalize_inventory_item(raw_item)
                     offer = await self._fetch_offer(client, item.sku)
-                    items.append(self._apply_offer(item, offer))
+                    item = self._apply_offer(item, offer)
+                    if self._is_active_available_listing(item):
+                        items.append(item)
 
                 offset += len(raw_items)
                 if offset >= int(payload.get("total", offset)) or len(raw_items) < page_size:
                     break
 
         return items
+
+    async def _fetch_browse_seller_items(self, seller_username: str, limit: int = 200) -> list[InventoryItem]:
+        items: list[InventoryItem] = []
+        seen_item_ids: set[str] = set()
+        offset = 0
+        page_size = max(1, min(limit, 200))
+        query = getattr(self.settings, "ebay_browse_search_query", None)
+        if query is None or query == "":
+            query = " "
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            while len(items) < limit:
+                response = await client.get(
+                    "/buy/browse/v1/item_summary/search",
+                    params={
+                        "q": query,
+                        "filter": f"sellers:{{{seller_username}}}",
+                        "limit": min(page_size, limit - len(items)),
+                        "offset": offset,
+                    },
+                    headers=self._headers(),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                summaries = payload.get("itemSummaries", [])
+                if not summaries:
+                    break
+
+                for summary in summaries:
+                    item_id = str(summary.get("itemId") or "")
+                    if not item_id or item_id in seen_item_ids:
+                        continue
+                    seen_item_ids.add(item_id)
+                    detail = await self._fetch_browse_item_detail(client, item_id)
+                    item = self._normalize_browse_item({**summary, **detail})
+                    if self._is_active_available_listing(item):
+                        items.append(item)
+                    if len(items) >= limit:
+                        break
+
+                offset += len(summaries)
+                if offset >= int(payload.get("total", offset)) or len(summaries) < page_size:
+                    break
+
+        return items
+
+    async def _fetch_browse_item_detail(self, client: httpx.AsyncClient, item_id: str) -> dict[str, Any]:
+        response = await client.get(
+            f"/buy/browse/v1/item/{item_id}",
+            headers=self._headers(),
+        )
+        if response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -72,16 +155,20 @@ class EbayClient:
             str(key): ", ".join(value) if isinstance(value, list) else str(value)
             for key, value in aspects.items()
         }
+        image_urls = self._image_urls_from_sell_product(product)
+        item_id = str(raw_item.get("sku") or "")
 
         return InventoryItem(
-            sku=str(raw_item.get("sku") or ""),
-            title=str(product.get("title") or raw_item.get("sku") or "Untitled eBay item"),
+            sku=item_id,
+            title=str(product.get("title") or item_id or "Untitled eBay item"),
             description=product.get("description"),
             condition=raw_item.get("condition"),
             quantity=int(availability.get("quantity") or 0),
-            image_url=(product.get("imageUrls") or [None])[0],
+            image_url=self._best_image_url(image_urls),
+            image_urls=image_urls,
             item_specifics=item_specifics,
             source="ebay-api",
+            updated_at=datetime.now(timezone.utc),
         )
 
     def _apply_offer(self, item: InventoryItem, offer: dict[str, Any]) -> InventoryItem:
@@ -95,4 +182,178 @@ class EbayClient:
         if listing_id:
             item.ebay_item_id = str(listing_id)
             item.ebay_url = f"https://www.ebay.com/itm/{listing_id}"
+        item.listing_status = str(offer.get("status") or listing.get("listingStatus") or "PUBLISHED")
+        if offer.get("availableQuantity") is not None:
+            item.quantity = int(offer.get("availableQuantity") or item.quantity)
         return item
+
+    def _normalize_browse_item(self, raw_item: dict[str, Any]) -> InventoryItem:
+        legacy_item_id = self._legacy_item_id(raw_item)
+        image_urls = self._image_urls_from_browse_item(raw_item)
+        price = raw_item.get("price") or {}
+        availability = self._browse_availability(raw_item)
+        item_specifics = self._browse_item_specifics(raw_item)
+        category = self._browse_category(raw_item)
+        short_description = self._short_description(raw_item)
+
+        return InventoryItem(
+            sku=f"EBAY-{legacy_item_id}" if legacy_item_id else str(raw_item.get("itemId") or ""),
+            title=str(raw_item.get("title") or f"eBay listing {legacy_item_id}"),
+            description=short_description,
+            condition=raw_item.get("condition"),
+            price=self._float_value(price.get("value")),
+            currency=str(price.get("currency") or "USD"),
+            quantity=availability["quantity"],
+            ebay_item_id=legacy_item_id,
+            ebay_url=raw_item.get("itemWebUrl") or (f"https://www.ebay.com/itm/{legacy_item_id}" if legacy_item_id else None),
+            image_url=self._best_image_url(image_urls),
+            image_urls=image_urls,
+            category=category,
+            listing_status=availability["status"],
+            item_specifics=item_specifics,
+            source="ebay-browse-api",
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def _is_active_available_listing(self, item: InventoryItem) -> bool:
+        if item.quantity <= 0:
+            return False
+        if not item.image_url:
+            return False
+        status = (item.listing_status or "ACTIVE").strip().upper()
+        if status in {"SOLD", "ENDED", "INACTIVE", "OUT_OF_STOCK", "UNAVAILABLE"}:
+            return False
+        return status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"} or not item.listing_status
+
+    @staticmethod
+    def _legacy_item_id(raw_item: dict[str, Any]) -> str | None:
+        value = raw_item.get("legacyItemId")
+        if value:
+            return str(value)
+        item_id = str(raw_item.get("itemId") or "")
+        match = re.search(r"\|(\d+)\|", item_id)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _float_value(value: object) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _short_description(raw_item: dict[str, Any]) -> str | None:
+        value = raw_item.get("shortDescription") or raw_item.get("conditionDescription") or raw_item.get("description")
+        if not isinstance(value, str):
+            return None
+        cleaned = re.sub(r"<[^>]+>", " ", value)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned[:500] or None
+
+    @staticmethod
+    def _browse_category(raw_item: dict[str, Any]) -> str | None:
+        category_path = raw_item.get("categoryPath")
+        if isinstance(category_path, str) and category_path.strip():
+            return category_path.strip()
+        categories = raw_item.get("categories")
+        if isinstance(categories, list) and categories:
+            names = [str(category.get("categoryName")) for category in categories if isinstance(category, dict)]
+            return " > ".join(name for name in names if name and name != "None") or None
+        return None
+
+    @staticmethod
+    def _browse_availability(raw_item: dict[str, Any]) -> dict[str, int | str]:
+        availabilities = raw_item.get("estimatedAvailabilities")
+        if not isinstance(availabilities, list) or not availabilities:
+            return {"quantity": 1, "status": "ACTIVE"}
+
+        quantity = 0
+        status = "OUT_OF_STOCK"
+        for availability in availabilities:
+            if not isinstance(availability, dict):
+                continue
+            availability_status = str(availability.get("estimatedAvailabilityStatus") or "").upper()
+            available_quantity = availability.get("estimatedAvailableQuantity")
+            remaining_quantity = availability.get("estimatedRemainingQuantity")
+            candidate_quantity = available_quantity if available_quantity is not None else remaining_quantity
+            if availability_status in {"IN_STOCK", "LIMITED_STOCK"}:
+                status = "IN_STOCK"
+                quantity = max(quantity, int(candidate_quantity or 1))
+        return {"quantity": quantity, "status": status}
+
+    @staticmethod
+    def _browse_item_specifics(raw_item: dict[str, Any]) -> dict[str, str]:
+        item_specifics: dict[str, str] = {}
+        localized_aspects = raw_item.get("localizedAspects")
+        if isinstance(localized_aspects, list):
+            for aspect in localized_aspects:
+                if not isinstance(aspect, dict):
+                    continue
+                name = str(aspect.get("name") or "").strip()
+                value = str(aspect.get("value") or "").strip()
+                if name and value:
+                    item_specifics[name] = value
+        for field in ("brand", "color", "conditionId", "categoryId", "listingMarketplaceId"):
+            value = raw_item.get(field)
+            if value:
+                item_specifics[field] = str(value)
+        return item_specifics
+
+    def _image_urls_from_sell_product(self, product: dict[str, Any]) -> list[str]:
+        urls: list[str] = []
+        for value in product.get("imageUrls") or []:
+            if isinstance(value, str):
+                urls.append(value)
+        return self._dedupe_urls(urls)
+
+    def _image_urls_from_browse_item(self, raw_item: dict[str, Any]) -> list[str]:
+        urls: list[str] = []
+        for field in ("image", "additionalImages", "thumbnailImages"):
+            value = raw_item.get(field)
+            if isinstance(value, dict):
+                url = value.get("imageUrl")
+                if isinstance(url, str):
+                    urls.append(url)
+            elif isinstance(value, list):
+                for image in value:
+                    if isinstance(image, dict) and isinstance(image.get("imageUrl"), str):
+                        urls.append(str(image["imageUrl"]))
+        return self._dedupe_urls(urls)
+
+    def _best_image_url(self, urls: list[str]) -> str | None:
+        usable_urls = [url for url in self._dedupe_urls(urls) if self._usable_image_url(url)]
+        if not usable_urls:
+            return None
+        return max(usable_urls, key=self._image_quality_score)
+
+    @staticmethod
+    def _usable_image_url(url: str) -> bool:
+        lowered = url.lower().split("?")[0]
+        return lowered.startswith("https://") and any(
+            marker in lowered
+            for marker in (".jpg", ".jpeg", ".png", ".webp", "/images/", "i.ebayimg.com")
+        )
+
+    @staticmethod
+    def _image_quality_score(url: str) -> tuple[int, int]:
+        lowered = url.lower()
+        size_score = 0
+        size_match = re.search(r"s-l(\d+)", lowered)
+        if size_match:
+            size_score = int(size_match.group(1))
+        extension_score = 2 if lowered.split("?")[0].endswith((".jpg", ".jpeg", ".webp")) else 1
+        return size_score, extension_score
+
+    @staticmethod
+    def _dedupe_urls(urls: list[str]) -> list[str]:
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for url in urls:
+            clean_url = str(url).strip()
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
+            deduped.append(clean_url)
+        return deduped

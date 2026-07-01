@@ -21,7 +21,9 @@ class InventoryItem(BaseModel):
     ebay_item_id: str | None = None
     ebay_url: str | None = None
     image_url: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
     category: str | None = None
+    listing_status: str | None = None
     item_specifics: dict[str, str] = Field(default_factory=dict)
     source: str = "manual"
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -55,7 +57,7 @@ class CustomerAnswer(BaseModel):
 class SocialDraftRequest(BaseModel):
     query: str | None = None
     sku: str | None = None
-    campaign_goal: str = "Drive shoppers to the eBay store."
+    campaign_goal: str = "Advertise the Horizon Wireless Summer Sale and drive shoppers to the eBay store."
     tone: str = "friendly, clear, and sales-focused without hype"
     platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok", "linkedin"])
     posts_per_platform: int = Field(default=1, ge=1, le=5)
@@ -63,6 +65,9 @@ class SocialDraftRequest(BaseModel):
     max_products_per_run: int = Field(default=50, ge=1, le=50)
     cross_post_to_all_platforms: bool = True
     brand_name: str | None = None
+    sale_name: str = "Horizon Wireless Summer Sale"
+    store_url: str | None = None
+    sale_media_url: str | None = None
     media_url: str | None = None
     campaign_video: str | None = None
     facebook_groups: list[str] = Field(default_factory=list)
