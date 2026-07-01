@@ -15,6 +15,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
+DEFAULT_RENDER_GMAIL_CREDENTIALS_FILE = Path(
+    "/etc/secrets/client_secret_225009040001-55c5hksat2o9pf35emqvprb3kkti746j.apps.googleusercontent.com.json"
+)
+
+
 class ReportEmailError(RuntimeError):
     pass
 
@@ -254,6 +259,7 @@ def gmail_oauth_credentials(
         credentials_file,
         _setting_value(settings, "gmail_client_credentials_file"),
         os.getenv("GMAIL_CLIENT_CREDENTIALS_FILE"),
+        _default_render_gmail_credentials_file(),
     )
     if resolved_credentials_file:
         file_client_id, file_client_secret = _load_google_oauth_credentials_file(Path(resolved_credentials_file))
@@ -367,6 +373,15 @@ def _read_secret_file(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:
         raise ReportEmailError(f"Gmail client secret file does not exist: {path}") from exc
+
+
+def _default_render_gmail_credentials_file() -> str:
+    try:
+        if DEFAULT_RENDER_GMAIL_CREDENTIALS_FILE.is_file():
+            return str(DEFAULT_RENDER_GMAIL_CREDENTIALS_FILE)
+    except OSError:
+        return ""
+    return ""
 
 
 def _discover_google_oauth_credentials_file() -> Path | None:

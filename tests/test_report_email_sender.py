@@ -129,6 +129,26 @@ def test_gmail_oauth_credentials_file_takes_precedence_over_stale_env(monkeypatc
     assert credentials.client_secret == "file-client-secret"
 
 
+def test_gmail_oauth_credentials_uses_known_render_secret_file(monkeypatch, tmp_path):
+    credentials_file = tmp_path / "client_secret_google.json"
+    credentials_file.write_text(
+        json.dumps({"web": {"client_id": "render-file-client-id", "client_secret": "render-file-client-secret"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GMAIL_CLIENT_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setattr(report_email, "DEFAULT_RENDER_GMAIL_CREDENTIALS_FILE", credentials_file)
+
+    def fail_discovery():
+        raise AssertionError("discovery should not run when the known Render secret file exists")
+
+    monkeypatch.setattr(report_email, "_discover_google_oauth_credentials_file", fail_discovery)
+
+    credentials = report_email.gmail_oauth_credentials()
+
+    assert credentials.client_id == "render-file-client-id"
+    assert credentials.client_secret == "render-file-client-secret"
+
+
 def test_gmail_access_token_includes_google_error_body(monkeypatch):
     def fake_urlopen(request, timeout=60):
         raise HTTPError(
