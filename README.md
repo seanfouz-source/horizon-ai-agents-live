@@ -121,10 +121,11 @@ Render can send the same report without Zapier or GitHub:
 
 1. The `render.yaml` blueprint includes a `horizon-daily-report-email` Cron Job scheduled at `15 5 * * *`.
 2. To send from Gmail, set `REPORT_EMAIL_PROVIDER=gmail`, `REPORT_EMAIL_FROM=sean.fouz@gmail.com`, and `GMAIL_SENDER=sean.fouz@gmail.com`.
-3. Add Google OAuth variables to the web service in Render: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN`.
-4. Generate the refresh token locally with `python scripts/create_gmail_refresh_token.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET`.
-5. The Cron Job command calls `POST https://horizon-ai-agents.onrender.com/reports/daily/email`, so Gmail and Metricool credentials stay on the web service.
-6. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
+3. Add Google OAuth variables to the web service in Render: `GMAIL_CLIENT_ID` plus either `GMAIL_CLIENT_SECRET`, `GMAIL_CLIENT_SECRET_FILE`, or `GMAIL_CLIENT_CREDENTIALS_FILE`. A Google OAuth JSON secret file can also be uploaded to Render as a secret file; Render mounts it at `/etc/secrets/<filename>`.
+4. Add `https://horizon-ai-agents.onrender.com` as the Google OAuth JavaScript origin and `https://horizon-ai-agents.onrender.com/oauth2callback` as the authorized redirect URI.
+5. Open `/gmail/oauth/start?secret=YOUR_WEBHOOK_SHARED_SECRET` on the Render web service, approve Gmail access, then copy the returned `GMAIL_REFRESH_TOKEN` into the Render web service environment.
+6. The Cron Job runs `python scripts/post_render_daily_report_email.py`, which calls `POST https://horizon-ai-agents.onrender.com/reports/daily/email` and prints any error response body while Gmail and Metricool credentials stay on the web service.
+7. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
 
 Example social draft request:
 

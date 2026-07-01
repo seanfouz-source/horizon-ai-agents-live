@@ -1,5 +1,7 @@
 from email.message import EmailMessage
+from io import BytesIO
 import json
+from urllib.error import HTTPError
 
 import pytest
 
@@ -97,3 +99,89 @@ def test_send_gmail_message_refreshes_token_and_sends_raw_message(monkeypatch):
     body = json.loads(gmail_request.data.decode("utf-8"))
     assert body["raw"]
     assert message["From"] == "Horizon AI Agents <sean.fouz@gmail.com>"
+
+
+def test_gmail_oauth_credentials_loads_google_credentials_file(tmp_path):
+    credentials_file = tmp_path / "client_secret_google.json"
+    credentials_file.write_text(
+        json.dumps({"web": {"client_id": "file-client-id", "client_secret": "file-client-secret"}}),
+        encoding="utf-8",
+    )
+
+    credentials = report_email.gmail_oauth_credentials(credentials_file=credentials_file)
+
+    assert credentials.client_id == "file-client-id"
+    assert credentials.client_secret == "file-client-secret"
+
+
+def test_gmail_access_token_includes_google_error_body(monkeypatch):
+    def fake_urlopen(request, timeout=60):
+        raise HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            {},
+            BytesIO(
+                json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked"}).encode(
+                    "utf-8"
+                )
+            ),
+        )
+
+    monkeypatch.setattr(report_email, "urlopen", fake_urlopen)
+
+    with pytest.raises(report_email.ReportEmailError, match="invalid_grant - Token has been expired or revoked"):
+        report_email.gmail_access_token(
+            client_id="client-id",
+            client_secret="client-secret",
+            refresh_token="refresh-token",
+        )
+
+
+def test_send_gmail_message_includes_google_send_error_body(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps({"access_token": "ya29.test"}).encode("utf-8")
+
+    def fake_urlopen(request, timeout=60):
+        calls.append(request)
+        if request.full_url == "https://oauth2.googleapis.com/token":
+            return FakeResponse()
+        raise HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            {},
+            BytesIO(
+                json.dumps({"error": {"status": "PERMISSION_DENIED", "message": "Gmail API has not been used"}}).encode(
+                    "utf-8"
+                )
+            ),
+        )
+
+    monkeypatch.setattr(report_email, "urlopen", fake_urlopen)
+
+    message = EmailMessage()
+    message["To"] = "owner@example.com"
+    message["From"] = "Horizon AI Agents <old@example.com>"
+    message["Subject"] = "Daily report"
+    message.set_content("Report body")
+
+    with pytest.raises(report_email.ReportEmailError, match="PERMISSION_DENIED - Gmail API has not been used"):
+        send_gmail_message(
+            message,
+            client_id="client-id",
+            client_secret="client-secret",
+            refresh_token="refresh-token",
+            sender="sean.fouz@gmail.com",
+        )
+
+    assert len(calls) == 2

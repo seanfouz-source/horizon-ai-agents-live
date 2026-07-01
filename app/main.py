@@ -1,10 +1,18 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
+import logging
+import secrets
+import time
 from datetime import date, datetime
+from html import escape
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app.agents import (
     answer_customer_question,
@@ -41,14 +49,23 @@ from app.reports import (
     format_daily_report_pdf,
     report_attachment_filename,
 )
-from app.report_email import ReportEmailError, build_message_from_settings, send_message_from_settings
+from app.report_email import (
+    ReportEmailError,
+    build_message_from_settings,
+    exchange_gmail_authorization_code,
+    gmail_oauth_credentials,
+    send_message_from_settings,
+)
 from app.store_sync import StorePageSyncer
 
 
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_OAUTH_STATE_MAX_AGE_SECONDS = 15 * 60
 settings = get_settings()
 repository = InventoryRepository(settings.resolved_database_path)
 store_syncer = StorePageSyncer(settings, repository)
 app = FastAPI(title=settings.app_name)
+logger = logging.getLogger(__name__)
 
 
 def verify_secret(x_horizon_secret: str | None, query_secret: str | None = None) -> None:
@@ -62,6 +79,69 @@ def verify_secret(x_horizon_secret: str | None, query_secret: str | None = None)
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "service": settings.app_name, "store_sync": store_syncer.last_status}
+
+
+@app.get("/gmail/oauth/start")
+def gmail_oauth_start(
+    secret: str | None = None,
+    x_horizon_secret: str | None = Header(default=None),
+) -> RedirectResponse:
+    verify_secret(x_horizon_secret, secret)
+    try:
+        credentials = gmail_oauth_credentials(settings=settings)
+        state = _sign_gmail_oauth_state()
+    except ReportEmailError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    redirect_uri = _gmail_oauth_redirect_uri()
+    authorization_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
+        {
+            "client_id": credentials.client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": GMAIL_SEND_SCOPE,
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+            "login_hint": settings.gmail_sender or settings.report_email_from or "sean.fouz@gmail.com",
+        }
+    )
+    return RedirectResponse(authorization_url, status_code=302)
+
+
+@app.get("/oauth2callback", response_class=HTMLResponse)
+def gmail_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> HTMLResponse:
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google authorization failed: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Google authorization did not return a code.")
+    if not state or not _verify_gmail_oauth_state(state):
+        raise HTTPException(status_code=400, detail="Invalid or expired Google OAuth state.")
+
+    try:
+        token_payload = exchange_gmail_authorization_code(
+            code=code,
+            redirect_uri=_gmail_oauth_redirect_uri(),
+            settings=settings,
+        )
+    except ReportEmailError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    refresh_token = token_payload.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Google did not return a refresh token. Remove the old app grant and retry the OAuth start URL.",
+        )
+
+    return HTMLResponse(
+        _gmail_oauth_success_html(refresh_token),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.on_event("startup")
@@ -226,6 +306,7 @@ async def daily_report_email(
     except MetricoolReportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ReportEmailError as exc:
+        logger.error("Daily report email failed: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {
@@ -519,6 +600,78 @@ def _zapier_slow_mover_outreach_response(plan: SlowMoverOutreachPlan) -> dict[st
     response["comment_keyword_items"] = [draft.comment_keyword for draft in plan.drafts]
     response["manychat_reply_items"] = [draft.manychat_reply for draft in plan.drafts]
     return response
+
+
+def _gmail_oauth_redirect_uri() -> str:
+    return f"{settings.public_base_url.rstrip('/')}/oauth2callback"
+
+
+def _sign_gmail_oauth_state() -> str:
+    payload = {
+        "ts": int(time.time()),
+        "nonce": secrets.token_urlsafe(18),
+    }
+    encoded_payload = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = _gmail_oauth_state_signature(encoded_payload)
+    return f"{encoded_payload}.{signature}"
+
+
+def _verify_gmail_oauth_state(value: str) -> bool:
+    try:
+        encoded_payload, signature = value.rsplit(".", 1)
+    except ValueError:
+        return False
+
+    expected_signature = _gmail_oauth_state_signature(encoded_payload)
+    if not hmac.compare_digest(signature, expected_signature):
+        return False
+
+    try:
+        payload = json.loads(_urlsafe_b64decode(encoded_payload).decode("utf-8"))
+        issued_at = int(payload["ts"])
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+
+    return 0 <= time.time() - issued_at <= GMAIL_OAUTH_STATE_MAX_AGE_SECONDS
+
+
+def _gmail_oauth_state_signature(encoded_payload: str) -> str:
+    secret = _gmail_oauth_state_secret()
+    digest = hmac.new(secret.encode("utf-8"), encoded_payload.encode("utf-8"), hashlib.sha256).digest()
+    return _urlsafe_b64encode(digest)
+
+
+def _gmail_oauth_state_secret() -> str:
+    if settings.webhook_shared_secret:
+        return settings.webhook_shared_secret
+    return gmail_oauth_credentials(settings=settings).client_secret
+
+
+def _urlsafe_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(value: str) -> bytes:
+    padding = "=" * ((4 - len(value) % 4) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def _gmail_oauth_success_html(refresh_token: str) -> str:
+    escaped_token = escape(refresh_token)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex">
+  <title>Gmail connected</title>
+</head>
+<body>
+  <h1>Gmail connected</h1>
+  <p>Copy this value into Render for the <code>horizon-ai-agents</code> web service.</p>
+  <pre>GMAIL_REFRESH_TOKEN={escaped_token}</pre>
+  <p>After saving the environment variable, trigger the daily report cron again.</p>
+</body>
+</html>"""
 
 
 def _parse_report_date(value: object) -> date | None:

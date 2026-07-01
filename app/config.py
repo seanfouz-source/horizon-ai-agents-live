@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     gmail_sender: str | None = None
     gmail_client_id: str | None = None
     gmail_client_secret: str | None = None
+    gmail_client_credentials_file: Path | None = None
+    gmail_client_secret_file: Path | None = None
     gmail_refresh_token: str | None = None
 
     @property
