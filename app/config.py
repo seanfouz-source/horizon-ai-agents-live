@@ -31,7 +31,10 @@ class Settings(BaseSettings):
     ebay_browse_search_query: str = " "
     ebay_store_url: str = "https://www.ebay.com/str/exactspec"
     ebay_store_backup_url: str | None = "https://ebay.us/m/GDmaKw"
-    ebay_store_sale_media_url: str | None = "https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg"
+    ebay_store_sale_media_url: str | None = (
+        "https://raw.githubusercontent.com/seanfouz-source/horizon-ai-agents-live/main/assets/"
+        "horizon-summer-sale-square.jpg"
+    )
     ebay_store_max_pages: int = 3
     sync_ebay_api_on_startup: bool = True
     sync_store_page_on_startup: bool = True

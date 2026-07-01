@@ -86,7 +86,7 @@ Body:
   "brand_name": "Horizon Wireless",
   "sale_name": "Horizon Wireless Summer Sale",
   "store_url": "https://www.ebay.com/str/exactspec",
-  "sale_media_url": "https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg",
+  "sale_media_url": "https://raw.githubusercontent.com/seanfouz-source/horizon-ai-agents-live/main/assets/horizon-summer-sale-square.jpg",
   "as_draft": false,
   "auto_publish": true
 }

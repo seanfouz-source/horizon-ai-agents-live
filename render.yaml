@@ -20,7 +20,7 @@ services:
       - key: EBAY_STORE_BACKUP_URL
         value: https://ebay.us/m/GDmaKw
       - key: EBAY_STORE_SALE_MEDIA_URL
-        value: https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg
+        value: https://raw.githubusercontent.com/seanfouz-source/horizon-ai-agents-live/main/assets/horizon-summer-sale-square.jpg
       - key: EBAY_SELLER_USERNAME
         value: exactspec-electronics
       - key: EBAY_BROWSE_SEARCH_QUERY

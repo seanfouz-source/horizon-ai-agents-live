@@ -139,15 +139,15 @@ Example social draft request:
   "brand_name": "Horizon Wireless",
   "sale_name": "Horizon Wireless Summer Sale",
   "store_url": "https://www.ebay.com/str/exactspec",
-  "sale_media_url": "https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg",
+  "sale_media_url": "https://raw.githubusercontent.com/seanfouz-source/horizon-ai-agents-live/main/assets/horizon-summer-sale-square.jpg",
   "as_draft": false,
   "auto_publish": true
 }
 ```
 
 When `promote_all_inventory` is true, the app creates one Metricool payload per
-eligible active eBay listing, using the eBay store's July Summer Sale banner as
-the default campaign media. If `sale_media_url` and `media_url` are omitted, the
+eligible active eBay listing, using an Instagram-safe square version of the eBay
+store's July Summer Sale banner as the default campaign media. If `sale_media_url` and `media_url` are omitted, the
 app falls back to the selected eBay product image when available. Metricool remains the public social scheduler; the app only prepares
 Metricool-ready payloads and records local scheduling history to prevent reruns
 from duplicating posts. The hard default cap is 2 Metricool posts per calendar

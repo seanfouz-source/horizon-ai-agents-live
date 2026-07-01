@@ -83,7 +83,10 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
         assert payload["linkedin"] is True
         assert payload["as_draft"] is False
         assert payload["auto_publish"] is True
-        assert payload["media_01"] == "https://i.ebayimg.com/images/g/R68AAeSwSoNqQddN/s-l1600.jpg"
+        assert (
+            payload["media_01"]
+            == "https://raw.githubusercontent.com/seanfouz-source/horizon-ai-agents-live/main/assets/horizon-summer-sale-square.jpg"
+        )
         assert payload["publication_date_time"].startswith("2026-05-29")
         assert payload["post_content"].startswith("Horizon Wireless Summer Sale spotlight:")
         assert "Shop the full Horizon Wireless sale on our eBay store: https://www.ebay.com/str/exactspec" in payload[
