@@ -65,6 +65,7 @@ def manychat_dynamic_response(answer: CustomerAnswer) -> dict[str, object]:
 def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str, object]:
     publication_date_time = _metricool_publication_time(post, request)
     media_url = _metricool_media_url(post, request)
+    post_content = _metricool_post_content(post, request)
     facebook_enabled = _platform_enabled(post, request, "facebook")
     instagram_enabled = _platform_enabled(post, request, "instagram")
     tiktok_enabled = _platform_enabled(post, request, "tiktok")
@@ -80,8 +81,16 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         "facebook_groups": facebook_groups,
         "publication_date_time": publication_date_time,
         "publicationDate": publication_date_time,
-        "post_content": post.text,
+        "post_content": post_content,
+        "facebook_post": post_content,
+        "instagram_post": post_content,
+        "tiktok_post": post_content,
+        "linkedin_post": post_content,
         "media_01": media_url,
+        "facebook_media_01": media_url,
+        "instagram_media_01": media_url,
+        "tiktok_media_01": media_url,
+        "linkedin_media_01": media_url,
         "as_draft": request.as_draft,
         "draft": request.as_draft,
         "auto_publish": request.auto_publish,
@@ -155,6 +164,7 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         None,
     )
     publication_date_time = first_payload.get("publication_date_time") or first_payload.get("publicationDate")
+    post_content = _first_post_content(batch.metricool_payloads)
     as_draft = first_payload.get("as_draft")
     if as_draft is None:
         as_draft = first_payload.get("draft")
@@ -169,8 +179,16 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         ),
         "metricool_facebook_groups": _csv_value(facebook_groups),
         "metricool_publication_date_time": publication_date_time,
-        "metricool_post_content": first_payload.get("post_content"),
+        "metricool_post_content": post_content,
+        "metricool_facebook_post": _platform_post_content(batch.metricool_payloads, "facebook"),
+        "metricool_instagram_post": _platform_post_content(batch.metricool_payloads, "instagram"),
+        "metricool_tiktok_post": _platform_post_content(batch.metricool_payloads, "tiktok"),
+        "metricool_linkedin_post": _platform_post_content(batch.metricool_payloads, "linkedin"),
         "metricool_media_01": flat_media_url,
+        "metricool_facebook_media_01": _platform_media_url(batch.metricool_payloads, "facebook"),
+        "metricool_instagram_media_01": _platform_media_url(batch.metricool_payloads, "instagram"),
+        "metricool_tiktok_media_01": _platform_media_url(batch.metricool_payloads, "tiktok"),
+        "metricool_linkedin_media_01": _platform_media_url(batch.metricool_payloads, "linkedin"),
         "metricool_as_draft": as_draft,
         "metricool_auto_publish": first_payload.get("auto_publish"),
         "metricool_post_type": first_payload.get("post_type"),
@@ -209,7 +227,15 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
         "facebook_groups",
         "publication_date_time",
         "post_content",
+        "facebook_post",
+        "instagram_post",
+        "tiktok_post",
+        "linkedin_post",
         "media_01",
+        "facebook_media_01",
+        "instagram_media_01",
+        "tiktok_media_01",
+        "linkedin_media_01",
         "as_draft",
         "auto_publish",
         "post_type",
@@ -229,7 +255,7 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
     line_items: dict[str, object] = {"metricool_payload_count": len(payloads)}
     for field in fields:
         line_items[f"metricool_{field}_items"] = [
-            _csv_value(payload.get(field)) if field == "facebook_groups" else payload.get(field)
+            _metricool_line_item_value(payload, field)
             for payload in payloads
         ]
     line_items["publicationDate_items"] = [
@@ -241,6 +267,60 @@ def _metricool_line_items(payloads: list[dict[str, object]]) -> dict[str, object
         for payload in payloads
     ]
     return line_items
+
+
+def _metricool_line_item_value(payload: dict[str, object], field: str) -> object:
+    if field == "facebook_groups":
+        return _csv_value(payload.get(field))
+    if field == "post_content" or field.endswith("_post"):
+        return _payload_post_content(payload)
+    if field.endswith("_media_01"):
+        return payload.get(field) or payload.get("media_01")
+    return payload.get(field)
+
+
+def _metricool_post_content(post: SocialPost, request: SocialDraftRequest) -> str:
+    text = post.text.strip()
+    if text:
+        return text
+
+    brand = request.brand_name or "Horizon Wireless"
+    title = (post.product_title or "featured eBay listing").strip()
+    if post.ebay_url:
+        return f"{brand} listing spotlight: {title}\nView this listing: {post.ebay_url}"
+    return f"{brand} listing spotlight: {title}"
+
+
+def _payload_post_content(payload: dict[str, object] | None) -> str | None:
+    if not payload:
+        return None
+    value = payload.get("post_content")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    for field in ("facebook_post", "instagram_post", "tiktok_post", "linkedin_post"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _first_enabled_payload(payloads: list[dict[str, object]], platform: str) -> dict[str, object] | None:
+    return next((payload for payload in payloads if payload.get(platform)), None)
+
+
+def _first_post_content(payloads: list[dict[str, object]]) -> str | None:
+    return next((content for content in (_payload_post_content(payload) for payload in payloads) if content), None)
+
+
+def _platform_post_content(payloads: list[dict[str, object]], platform: str) -> str | None:
+    return _payload_post_content(_first_enabled_payload(payloads, platform)) or _first_post_content(payloads)
+
+
+def _platform_media_url(payloads: list[dict[str, object]], platform: str) -> object:
+    payload = _first_enabled_payload(payloads, platform)
+    if payload:
+        return payload.get(f"{platform}_media_01") or payload.get("media_01")
+    return next((payload.get("media_01") for payload in payloads if payload.get("media_01")), None)
 
 
 def _is_video_media(value: object) -> bool:

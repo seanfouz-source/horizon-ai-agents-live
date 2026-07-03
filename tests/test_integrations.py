@@ -75,6 +75,13 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
     assert response["publicationDate"] == "2026-05-25 05:46:21"
     assert response["draft"] is True
     assert response["metricool_post_content"] == "Shop this ExactSpec listing."
+    assert response["metricool_facebook_post"] == "Shop this ExactSpec listing."
+    assert response["metricool_facebook_post_items"] == [
+        "Shop this ExactSpec listing.",
+        "Shop this ExactSpec listing.",
+        "Shop this ExactSpec listing.",
+        "Shop this ExactSpec listing.",
+    ]
     assert response["metricool_facebook"] is True
     assert response["metricool_instagram"] is False
     assert response["metricool_tiktok"] is False
@@ -108,6 +115,47 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
     assert response["metricool_buy_url_items"][0] == "https://www.ebay.com/itm/1"
     assert response["metricool_link_url_items"][0] == "https://www.ebay.com/itm/1"
     assert response["metricool_facebook_link_url_items"][0] == "https://www.ebay.com/itm/1"
+
+
+def test_zapier_social_drafts_response_adds_platform_specific_post_aliases():
+    batch = SocialDraftBatch(
+        campaign_name="ExactSpec test",
+        posts=[],
+        metricool_payloads=[
+            {
+                "brand_name": "ExactSpec",
+                "facebook": False,
+                "instagram": True,
+                "publication_date_time": "2026-05-25 05:46:21",
+                "post_content": "Instagram caption.",
+                "media_01": "https://example.com/instagram.jpg",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            },
+            {
+                "brand_name": "ExactSpec",
+                "facebook": True,
+                "instagram": False,
+                "publication_date_time": "2026-05-25 06:46:21",
+                "post_content": "Facebook caption.",
+                "media_01": "https://example.com/facebook.jpg",
+                "as_draft": False,
+                "auto_publish": True,
+                "post_type": "POST",
+            },
+        ],
+    )
+
+    response = zapier_social_drafts_response(batch)
+
+    assert response["metricool_facebook_post"] == "Facebook caption."
+    assert response["metricool_facebook_media_01"] == "https://example.com/facebook.jpg"
+    assert response["metricool_facebook_post_items"] == ["Instagram caption.", "Facebook caption."]
+    assert response["metricool_facebook_media_01_items"] == [
+        "https://example.com/instagram.jpg",
+        "https://example.com/facebook.jpg",
+    ]
 
 
 def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
@@ -161,6 +209,25 @@ def test_metricool_payload_adds_generated_product_media_url():
     )
 
     assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+
+
+def test_metricool_payload_replaces_blank_caption_with_listing_fallback():
+    payload = metricool_payload(
+        SocialPost(
+            platform="facebook",
+            text="  ",
+            product_title="Demo Phone",
+            ebay_url="https://www.ebay.com/itm/123",
+        ),
+        SocialDraftRequest(brand_name="Horizon Wireless"),
+    )
+
+    assert payload["post_content"] == (
+        "Horizon Wireless listing spotlight: Demo Phone\n"
+        "View this listing: https://www.ebay.com/itm/123"
+    )
+    assert payload["facebook_post"] == payload["post_content"]
+    assert "media_01" not in payload
 
 
 def test_metricool_payload_replaces_tiktok_png_with_generated_jpeg():

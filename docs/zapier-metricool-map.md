@@ -139,7 +139,15 @@ metricool_linkedin_items
 metricool_publication_date_time_items
 publicationDate_items
 metricool_post_content_items
+metricool_facebook_post_items
+metricool_instagram_post_items
+metricool_tiktok_post_items
+metricool_linkedin_post_items
 metricool_media_01_items
+metricool_facebook_media_01_items
+metricool_instagram_media_01_items
+metricool_tiktok_media_01_items
+metricool_linkedin_media_01_items
 metricool_as_draft_items
 draft_items
 metricool_auto_publish_items
@@ -158,6 +166,14 @@ metricool_instagram
 metricool_tiktok
 metricool_linkedin
 metricool_media_01
+metricool_facebook_post
+metricool_instagram_post
+metricool_tiktok_post
+metricool_linkedin_post
+metricool_facebook_media_01
+metricool_instagram_media_01
+metricool_tiktok_media_01
+metricool_linkedin_media_01
 metricool_publish_to_facebook_groups
 metricool_facebook_groups
 metricool_product_sku
@@ -197,7 +213,9 @@ Tiktok -> metricool_tiktok
 LinkedIn -> metricool_linkedin
 Publication Date/Time -> metricool_publication_date_time
 Post content / Text -> metricool_post_content
+Facebook -> Post, if Metricool shows platform-specific fields -> metricool_facebook_post
 Media 01 -> metricool_media_01
+Facebook -> Media 01, if Metricool shows platform-specific fields -> metricool_facebook_media_01
 Link URL / URL, if available -> metricool_link_url
 As draft -> metricool_as_draft
 Auto publish -> metricool_auto_publish
@@ -222,7 +240,15 @@ Tiktok -> metricool_tiktok_items
 LinkedIn -> metricool_linkedin_items
 Publication Date/Time (publicationDate) -> publicationDate_items
 Post content / Text -> metricool_post_content_items
+Facebook -> Post, if Metricool shows platform-specific fields -> metricool_facebook_post_items
+Instagram -> Post, if Metricool shows platform-specific fields -> metricool_instagram_post_items
+Tiktok -> Post, if Metricool shows platform-specific fields -> metricool_tiktok_post_items
+LinkedIn -> Post, if Metricool shows platform-specific fields -> metricool_linkedin_post_items
 Media 01 -> metricool_media_01_items
+Facebook -> Media 01, if Metricool shows platform-specific fields -> metricool_facebook_media_01_items
+Instagram -> Media 01, if Metricool shows platform-specific fields -> metricool_instagram_media_01_items
+Tiktok -> Media 01, if Metricool shows platform-specific fields -> metricool_tiktok_media_01_items
+LinkedIn -> Media 01, if Metricool shows platform-specific fields -> metricool_linkedin_media_01_items
 Link URL / URL, if available -> metricool_link_url_items
 As draft (draft) -> draft_items
 Auto publish -> metricool_auto_publish_items
