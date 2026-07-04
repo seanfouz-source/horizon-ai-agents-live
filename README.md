@@ -176,13 +176,15 @@ sku,title,description,condition,price,currency,quantity,ebay_item_id,ebay_url,im
 {"Brand":"Sony","Color":"Black","Size":"Large"}
 ```
 
-Live sync can use either `EBAY_ACCESS_TOKEN` or long-lived OAuth refresh
-credentials. eBay access tokens are short-lived, so production should set
-`EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, and `EBAY_REFRESH_TOKEN`; the app will
-exchange the refresh token for a fresh access token before each inventory sync.
-`EBAY_OAUTH_SCOPES` defaults to `https://api.ebay.com/oauth/api_scope`, which is
-enough for the public Browse API fallback. Add eBay Sell Inventory scopes there
-only if the refresh token was authorized for them.
+Live sync can use `EBAY_ACCESS_TOKEN`, long-lived OAuth refresh credentials, or
+client credentials. eBay access tokens are short-lived, so production should set
+`EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET`; the app will mint a fresh OAuth
+Application access token before inventory syncs that use the public Browse API
+fallback. If you also set `EBAY_REFRESH_TOKEN`, the app will prefer that user
+refresh-token flow before each inventory sync. `EBAY_OAUTH_SCOPES` defaults to
+`https://api.ebay.com/oauth/api_scope`, which is enough for the public Browse API
+fallback. Add eBay Sell Inventory scopes there only if the refresh token was
+authorized for them.
 
 The service tries the eBay Sell Inventory API first, then falls back to the eBay
 Buy Browse API seller search/details endpoint when Seller Hub listings are not

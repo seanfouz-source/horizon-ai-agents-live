@@ -19,8 +19,11 @@ class EbayClient:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._access_token = (settings.ebay_access_token or "").strip() or None
-        if not self._access_token and not self._has_refresh_credentials():
-            raise RuntimeError("EBAY_ACCESS_TOKEN or eBay OAuth refresh credentials are required for live eBay sync.")
+        if not self._access_token and not self._has_refresh_credentials() and not self._has_client_credentials():
+            raise RuntimeError(
+                "EBAY_ACCESS_TOKEN, eBay OAuth refresh credentials, or EBAY_CLIENT_ID/EBAY_CLIENT_SECRET "
+                "are required for live eBay sync."
+            )
 
     async def fetch_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         sell_inventory_items: list[InventoryItem] = []
@@ -145,11 +148,19 @@ class EbayClient:
             for field in ("ebay_client_id", "ebay_client_secret", "ebay_refresh_token")
         )
 
-    async def _ensure_access_token(self, client: httpx.AsyncClient) -> None:
-        if not self._has_refresh_credentials():
-            return
+    def _has_client_credentials(self) -> bool:
+        return all(
+            str(getattr(self.settings, field, "") or "").strip()
+            for field in ("ebay_client_id", "ebay_client_secret")
+        )
 
-        refreshed_token = await self._refresh_access_token(client)
+    async def _ensure_access_token(self, client: httpx.AsyncClient) -> None:
+        if self._has_refresh_credentials():
+            refreshed_token = await self._refresh_access_token(client)
+        elif self._has_client_credentials():
+            refreshed_token = await self._client_credentials_access_token(client)
+        else:
+            refreshed_token = None
         if refreshed_token:
             self._access_token = refreshed_token
 
@@ -183,6 +194,36 @@ class EbayClient:
         if not isinstance(access_token, str) or not access_token.strip():
             raise RuntimeError("eBay OAuth refresh response did not include an access token.")
         logger.info("Refreshed eBay access token for inventory sync.")
+        return access_token.strip()
+
+    async def _client_credentials_access_token(self, client: httpx.AsyncClient) -> str | None:
+        client_id = str(getattr(self.settings, "ebay_client_id", "") or "").strip()
+        client_secret = str(getattr(self.settings, "ebay_client_secret", "") or "").strip()
+        scopes = str(getattr(self.settings, "ebay_oauth_scopes", "") or "").strip()
+        if not client_id or not client_secret:
+            return None
+
+        credentials = b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        data = {
+            "grant_type": "client_credentials",
+        }
+        if scopes:
+            data["scope"] = scopes
+        response = await client.post(
+            "/identity/v1/oauth2/token",
+            data=data,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        access_token = payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token.strip():
+            raise RuntimeError("eBay OAuth client credentials response did not include an access token.")
+        logger.info("Minted eBay application access token for inventory sync.")
         return access_token.strip()
 
     async def _fetch_offer(self, client: httpx.AsyncClient, sku: str) -> dict[str, Any]:

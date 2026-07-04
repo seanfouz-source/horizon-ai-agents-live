@@ -214,9 +214,14 @@ async def _sync_ebay_api_inventory() -> dict[str, Any]:
 def _has_ebay_sync_credentials() -> bool:
     if (settings.ebay_access_token or "").strip():
         return True
-    return all(
+    if all(
         str(getattr(settings, field, "") or "").strip()
         for field in ("ebay_client_id", "ebay_client_secret", "ebay_refresh_token")
+    ):
+        return True
+    return all(
+        str(getattr(settings, field, "") or "").strip()
+        for field in ("ebay_client_id", "ebay_client_secret")
     )
 
 

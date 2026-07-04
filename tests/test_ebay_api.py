@@ -142,3 +142,41 @@ def test_ebay_client_refreshes_access_token_before_sync(monkeypatch):
     assert items == []
     assert requests[0][0:2] == ("POST", "/identity/v1/oauth2/token")
     assert requests[1][0:2] == ("GET", "/sell/inventory/v1/inventory_item")
+
+
+def test_ebay_client_mints_application_token_with_client_credentials(monkeypatch):
+    requests = []
+
+    def handler(path, payload, headers, method):
+        requests.append((method, path, payload, headers.get("Authorization", "")))
+        request = httpx.Request(method, f"https://api.ebay.com{path}")
+        if method == "POST" and path == "/identity/v1/oauth2/token":
+            assert payload["grant_type"] == "client_credentials"
+            assert payload["scope"] == "https://api.ebay.com/oauth/api_scope"
+            assert headers["Authorization"].startswith("Basic ")
+            return httpx.Response(200, json={"access_token": "application-access-token", "expires_in": 7200}, request=request)
+        if path == "/sell/inventory/v1/inventory_item":
+            assert headers["Authorization"] == "Bearer application-access-token"
+            return httpx.Response(200, json={"inventoryItems": [], "total": 0}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            assert headers["Authorization"] == "Bearer application-access-token"
+            return httpx.Response(200, json={"itemSummaries": [], "total": 0}, request=request)
+        raise AssertionError(f"Unexpected eBay request: {method} {path}")
+
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token=None,
+        ebay_client_id="client-id",
+        ebay_client_secret="client-secret",
+        ebay_refresh_token=None,
+        ebay_oauth_scopes="https://api.ebay.com/oauth/api_scope",
+        ebay_marketplace_id="EBAY_US",
+        ebay_seller_username="exactspec-electronics",
+        ebay_browse_search_query=" ",
+    )
+
+    items = asyncio.run(EbayClient(settings).fetch_inventory_items())
+
+    assert items == []
+    assert requests[0][0:2] == ("POST", "/identity/v1/oauth2/token")
+    assert requests[1][0:2] == ("GET", "/sell/inventory/v1/inventory_item")
