@@ -37,6 +37,14 @@ services:
         sync: false
       - key: EBAY_ACCESS_TOKEN
         sync: false
+      - key: EBAY_CLIENT_ID
+        sync: false
+      - key: EBAY_CLIENT_SECRET
+        sync: false
+      - key: EBAY_REFRESH_TOKEN
+        sync: false
+      - key: EBAY_OAUTH_SCOPES
+        value: https://api.ebay.com/oauth/api_scope
       - key: METRICOOL_DAILY_POST_LIMIT
         value: "2"
       - key: METRICOOL_MORNING_POST_TIME

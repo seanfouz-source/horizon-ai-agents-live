@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     manychat_api_token: str | None = None
     webhook_shared_secret: str | None = None
     ebay_access_token: str | None = None
+    ebay_client_id: str | None = None
+    ebay_client_secret: str | None = None
+    ebay_refresh_token: str | None = None
+    ebay_oauth_scopes: str = "https://api.ebay.com/oauth/api_scope"
     ebay_marketplace_id: str = "EBAY_US"
     ebay_seller_username: str = "exactspec-electronics"
     ebay_browse_search_query: str = " "

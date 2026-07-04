@@ -1,5 +1,6 @@
 import logging
 import re
+from base64 import b64encode
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,9 +17,10 @@ class EbayClient:
     base_url = "https://api.ebay.com"
 
     def __init__(self, settings: Settings):
-        if not settings.ebay_access_token:
-            raise RuntimeError("EBAY_ACCESS_TOKEN is required for live eBay sync.")
         self.settings = settings
+        self._access_token = (settings.ebay_access_token or "").strip() or None
+        if not self._access_token and not self._has_refresh_credentials():
+            raise RuntimeError("EBAY_ACCESS_TOKEN or eBay OAuth refresh credentials are required for live eBay sync.")
 
     async def fetch_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         sell_inventory_items: list[InventoryItem] = []
@@ -45,6 +47,7 @@ class EbayClient:
         page_size = max(1, min(limit, 200))
 
         async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            await self._ensure_access_token(client)
             while True:
                 response = await client.get(
                     "/sell/inventory/v1/inventory_item",
@@ -80,6 +83,7 @@ class EbayClient:
             query = " "
 
         async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            await self._ensure_access_token(client)
             while len(items) < limit:
                 response = await client.get(
                     "/buy/browse/v1/item_summary/search",
@@ -128,12 +132,58 @@ class EbayClient:
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.settings.ebay_access_token}",
+            "Authorization": f"Bearer {self._access_token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
             "Content-Language": "en-US",
             "X-EBAY-C-MARKETPLACE-ID": self.settings.ebay_marketplace_id,
         }
+
+    def _has_refresh_credentials(self) -> bool:
+        return all(
+            str(getattr(self.settings, field, "") or "").strip()
+            for field in ("ebay_client_id", "ebay_client_secret", "ebay_refresh_token")
+        )
+
+    async def _ensure_access_token(self, client: httpx.AsyncClient) -> None:
+        if not self._has_refresh_credentials():
+            return
+
+        refreshed_token = await self._refresh_access_token(client)
+        if refreshed_token:
+            self._access_token = refreshed_token
+
+    async def _refresh_access_token(self, client: httpx.AsyncClient) -> str | None:
+        client_id = str(getattr(self.settings, "ebay_client_id", "") or "").strip()
+        client_secret = str(getattr(self.settings, "ebay_client_secret", "") or "").strip()
+        refresh_token = str(getattr(self.settings, "ebay_refresh_token", "") or "").strip()
+        scopes = str(getattr(self.settings, "ebay_oauth_scopes", "") or "").strip()
+        if not client_id or not client_secret or not refresh_token:
+            return None
+
+        credentials = b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+        if scopes:
+            data["scope"] = scopes
+        response = await client.post(
+            "/identity/v1/oauth2/token",
+            data=data,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        access_token = payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token.strip():
+            raise RuntimeError("eBay OAuth refresh response did not include an access token.")
+        logger.info("Refreshed eBay access token for inventory sync.")
+        return access_token.strip()
 
     async def _fetch_offer(self, client: httpx.AsyncClient, sku: str) -> dict[str, Any]:
         response = await client.get(

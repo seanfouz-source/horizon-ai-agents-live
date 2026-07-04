@@ -165,7 +165,7 @@ async def startup_inventory_sync() -> None:
 
 async def _startup_inventory_refresh() -> None:
     api_status: dict[str, Any] | None = None
-    if settings.sync_ebay_api_on_startup and settings.ebay_access_token:
+    if settings.sync_ebay_api_on_startup and _has_ebay_sync_credentials():
         api_status = await _sync_ebay_api_inventory()
     if api_status and api_status.get("status") == "ok":
         return
@@ -176,12 +176,12 @@ async def _startup_inventory_refresh() -> None:
 async def _sync_ebay_api_inventory() -> dict[str, Any]:
     global ebay_sync_status
     attempted_at = datetime.now(timezone.utc).isoformat()
-    if not settings.ebay_access_token:
+    if not _has_ebay_sync_credentials():
         ebay_sync_status = {
             "source": "ebay-api",
             "status": "skipped",
             "imported": 0,
-            "message": "EBAY_ACCESS_TOKEN is not configured.",
+            "message": "eBay API credentials are not configured.",
             "last_attempt_at": attempted_at,
         }
         return ebay_sync_status
@@ -209,6 +209,15 @@ async def _sync_ebay_api_inventory() -> dict[str, Any]:
             "last_attempt_at": attempted_at,
         }
     return ebay_sync_status
+
+
+def _has_ebay_sync_credentials() -> bool:
+    if (settings.ebay_access_token or "").strip():
+        return True
+    return all(
+        str(getattr(settings, field, "") or "").strip()
+        for field in ("ebay_client_id", "ebay_client_secret", "ebay_refresh_token")
+    )
 
 
 @app.get("/inventory/search", response_model=InventorySearchResult)

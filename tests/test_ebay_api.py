@@ -18,7 +18,16 @@ class FakeAsyncClient:
         return None
 
     async def get(self, path, params=None, headers=None):
-        return self.handler(path, params or {})
+        return self._call_handler(path, params or {}, headers or {}, "GET")
+
+    async def post(self, path, data=None, headers=None):
+        return self._call_handler(path, data or {}, headers or {}, "POST")
+
+    def _call_handler(self, path, payload, headers, method):
+        arg_count = getattr(getattr(self.handler, "__code__", None), "co_argcount", 2)
+        if arg_count >= 4:
+            return self.handler(path, payload, headers, method)
+        return self.handler(path, payload)
 
 
 def test_ebay_client_falls_back_to_browse_api_and_selects_best_image(monkeypatch):
@@ -94,3 +103,42 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_best_image(monkeypatch
         "https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
     ]
     assert items[0].item_specifics["Storage Capacity"] == "128 GB"
+
+
+def test_ebay_client_refreshes_access_token_before_sync(monkeypatch):
+    requests = []
+
+    def handler(path, payload, headers, method):
+        requests.append((method, path, payload, headers.get("Authorization", "")))
+        request = httpx.Request(method, f"https://api.ebay.com{path}")
+        if method == "POST" and path == "/identity/v1/oauth2/token":
+            assert payload["grant_type"] == "refresh_token"
+            assert payload["refresh_token"] == "refresh-token"
+            assert payload["scope"] == "https://api.ebay.com/oauth/api_scope"
+            assert headers["Authorization"].startswith("Basic ")
+            return httpx.Response(200, json={"access_token": "fresh-access-token", "expires_in": 7200}, request=request)
+        if path == "/sell/inventory/v1/inventory_item":
+            assert headers["Authorization"] == "Bearer fresh-access-token"
+            return httpx.Response(200, json={"inventoryItems": [], "total": 0}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            assert headers["Authorization"] == "Bearer fresh-access-token"
+            return httpx.Response(200, json={"itemSummaries": [], "total": 0}, request=request)
+        raise AssertionError(f"Unexpected eBay request: {method} {path}")
+
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token=None,
+        ebay_client_id="client-id",
+        ebay_client_secret="client-secret",
+        ebay_refresh_token="refresh-token",
+        ebay_oauth_scopes="https://api.ebay.com/oauth/api_scope",
+        ebay_marketplace_id="EBAY_US",
+        ebay_seller_username="exactspec-electronics",
+        ebay_browse_search_query=" ",
+    )
+
+    items = asyncio.run(EbayClient(settings).fetch_inventory_items())
+
+    assert items == []
+    assert requests[0][0:2] == ("POST", "/identity/v1/oauth2/token")
+    assert requests[1][0:2] == ("GET", "/sell/inventory/v1/inventory_item")

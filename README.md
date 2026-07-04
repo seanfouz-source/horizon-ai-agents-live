@@ -176,12 +176,19 @@ sku,title,description,condition,price,currency,quantity,ebay_item_id,ebay_url,im
 {"Brand":"Sony","Color":"Black","Size":"Large"}
 ```
 
-Live sync needs `EBAY_ACCESS_TOKEN`. The service tries the eBay Sell Inventory
-API first, then falls back to the eBay Buy Browse API seller search/details
-endpoint when Seller Hub listings are not represented as Sell Inventory records.
-It stores active, available listings only: item ID, title, URL, price,
-condition, quantity, category, listing status, best image URL, all returned
-image URLs, short description, and item specifics.
+Live sync can use either `EBAY_ACCESS_TOKEN` or long-lived OAuth refresh
+credentials. eBay access tokens are short-lived, so production should set
+`EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, and `EBAY_REFRESH_TOKEN`; the app will
+exchange the refresh token for a fresh access token before each inventory sync.
+`EBAY_OAUTH_SCOPES` defaults to `https://api.ebay.com/oauth/api_scope`, which is
+enough for the public Browse API fallback. Add eBay Sell Inventory scopes there
+only if the refresh token was authorized for them.
+
+The service tries the eBay Sell Inventory API first, then falls back to the eBay
+Buy Browse API seller search/details endpoint when Seller Hub listings are not
+represented as Sell Inventory records. It stores active, available listings
+only: item ID, title, URL, price, condition, quantity, category, listing status,
+best image URL, all returned image URLs, short description, and item specifics.
 
 By default, social draft endpoints refresh inventory before generating Metricool
 payloads (`SYNC_INVENTORY_BEFORE_SOCIAL_POSTS=true`). This lets newly changed
