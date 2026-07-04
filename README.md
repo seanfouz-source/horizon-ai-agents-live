@@ -183,6 +183,14 @@ It stores active, available listings only: item ID, title, URL, price,
 condition, quantity, category, listing status, best image URL, all returned
 image URLs, short description, and item specifics.
 
+By default, social draft endpoints refresh inventory before generating Metricool
+payloads (`SYNC_INVENTORY_BEFORE_SOCIAL_POSTS=true`). This lets newly changed
+eBay listing photos flow into future `media_01` values automatically. If the
+eBay API token is invalid or eBay does not return data, the app tries the public
+store-page fallback and includes `inventory_refresh_*`, `ebay_sync_*`, and
+`store_sync_*` fields in Zapier responses so the Zap can show whether fresh
+listing photos were used or cached inventory was used.
+
 ## eBay Store URL Workaround
 
 The app now uses the eBay API as the default inventory source. The ExactSpec

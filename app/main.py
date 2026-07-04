@@ -478,14 +478,19 @@ async def customer_answer(question: CustomerQuestion) -> dict[str, Any]:
 
 @app.post("/agent/social-drafts", response_model=dict[str, Any])
 async def social_drafts(request: SocialDraftRequest) -> dict[str, Any]:
-    batch = await create_social_drafts(request)
-    return batch.model_dump()
+    batch, inventory_refresh = await _create_social_drafts_with_inventory_refresh(request)
+    response = batch.model_dump()
+    response["inventory_refresh"] = inventory_refresh
+    return response
 
 
 @app.post("/agent/slow-mover-outreach", response_model=dict[str, Any])
 async def slow_mover_outreach(request: SlowMoverOutreachRequest) -> dict[str, Any]:
+    inventory_refresh = await _refresh_inventory_for_social_posts()
     plan = create_slow_mover_outreach(request)
-    return plan.model_dump()
+    response = plan.model_dump()
+    response["inventory_refresh"] = inventory_refresh
+    return response
 
 
 @app.post("/agent/group-outreach-plan", response_model=dict[str, Any])
@@ -552,8 +557,10 @@ async def zapier_social_drafts(
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     draft_request = SocialDraftRequest.model_validate(await parse_zapier_body(request))
-    batch = await create_social_drafts(draft_request)
-    return zapier_social_drafts_response(batch)
+    batch, inventory_refresh = await _create_social_drafts_with_inventory_refresh(draft_request)
+    response = zapier_social_drafts_response(batch)
+    response.update(_inventory_refresh_zapier_fields(inventory_refresh))
+    return response
 
 
 @app.post("/webhooks/zapier/slow-mover-outreach")
@@ -563,8 +570,11 @@ async def zapier_slow_mover_outreach(
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     outreach_request = SlowMoverOutreachRequest.model_validate(await parse_zapier_body(request))
+    inventory_refresh = await _refresh_inventory_for_social_posts()
     plan = create_slow_mover_outreach(outreach_request)
-    return _zapier_slow_mover_outreach_response(plan)
+    response = _zapier_slow_mover_outreach_response(plan)
+    response.update(_inventory_refresh_zapier_fields(inventory_refresh))
+    return response
 
 
 @app.post("/webhooks/zapier/group-reply")
@@ -648,6 +658,94 @@ async def _build_daily_report(report_date: date | None = None) -> dict[str, Any]
     report = await build_daily_metricool_report(report_date)
     report["inventory"] = {"total_items": repository.count(), "store_sync": store_syncer.last_status}
     return report
+
+
+async def _create_social_drafts_with_inventory_refresh(
+    request: SocialDraftRequest,
+) -> tuple[SocialDraftBatch, dict[str, Any]]:
+    inventory_refresh = await _refresh_inventory_for_social_posts()
+    batch = await create_social_drafts(request)
+    _append_inventory_refresh_note(batch, inventory_refresh)
+    return batch, inventory_refresh
+
+
+async def _refresh_inventory_for_social_posts() -> dict[str, Any]:
+    if not settings.sync_inventory_before_social_posts:
+        return {
+            "source": "pre-social-refresh",
+            "status": "skipped",
+            "message": "Automatic inventory refresh before social posts is disabled.",
+            "ebay_sync": ebay_sync_status,
+            "store_sync": store_syncer.last_status,
+        }
+
+    api_status = await _sync_ebay_api_inventory()
+    store_status = store_syncer.last_status
+    if api_status.get("status") == "ok":
+        return {
+            "source": "pre-social-refresh",
+            "status": "ok",
+            "message": "Inventory refreshed from the eBay API before social posts were generated.",
+            "ebay_sync": api_status,
+            "store_sync": store_status,
+        }
+
+    store_status = await store_syncer.sync()
+    if store_status.get("status") == "ok":
+        return {
+            "source": "pre-social-refresh",
+            "status": "fallback_ok",
+            "message": "eBay API refresh did not complete; inventory refreshed from the public eBay store page fallback.",
+            "ebay_sync": api_status,
+            "store_sync": store_status,
+        }
+
+    if store_status.get("status") in {"cached", "fallback"}:
+        return {
+            "source": "pre-social-refresh",
+            "status": str(store_status.get("status")),
+            "message": "Inventory refresh did not complete; social posts used the best available cached inventory.",
+            "ebay_sync": api_status,
+            "store_sync": store_status,
+        }
+
+    return {
+        "source": "pre-social-refresh",
+        "status": "failed",
+        "message": "Inventory refresh failed before social posts were generated; cached inventory was used if available.",
+        "ebay_sync": api_status,
+        "store_sync": store_status,
+    }
+
+
+def _append_inventory_refresh_note(batch: SocialDraftBatch, inventory_refresh: dict[str, Any]) -> None:
+    message = inventory_refresh.get("message")
+    if not isinstance(message, str) or not message:
+        return
+    separator = " " if batch.notes else ""
+    batch.notes = f"{batch.notes}{separator}{message}"
+
+
+def _inventory_refresh_zapier_fields(inventory_refresh: dict[str, Any]) -> dict[str, Any]:
+    ebay_sync = inventory_refresh.get("ebay_sync")
+    if not isinstance(ebay_sync, dict):
+        ebay_sync = {}
+    store_sync = inventory_refresh.get("store_sync")
+    if not isinstance(store_sync, dict):
+        store_sync = {}
+    return {
+        "inventory_refresh_status": inventory_refresh.get("status"),
+        "inventory_refresh_message": inventory_refresh.get("message"),
+        "inventory_refresh_source": inventory_refresh.get("source"),
+        "ebay_sync_status": ebay_sync.get("status"),
+        "ebay_sync_message": ebay_sync.get("message"),
+        "ebay_sync_imported": ebay_sync.get("imported"),
+        "ebay_sync_last_attempt_at": ebay_sync.get("last_attempt_at"),
+        "store_sync_status": store_sync.get("status"),
+        "store_sync_message": store_sync.get("message"),
+        "store_sync_imported": store_sync.get("imported"),
+        "store_sync_last_attempt_at": store_sync.get("last_attempt_at"),
+    }
 
 
 def _zapier_slow_mover_outreach_response(plan: SlowMoverOutreachPlan) -> dict[str, Any]:
