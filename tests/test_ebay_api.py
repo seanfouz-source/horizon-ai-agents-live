@@ -30,7 +30,7 @@ class FakeAsyncClient:
         return self.handler(path, payload)
 
 
-def test_ebay_client_falls_back_to_browse_api_and_selects_best_image(monkeypatch):
+def test_ebay_client_falls_back_to_browse_api_and_selects_primary_image(monkeypatch):
     def handler(path, params):
         request = httpx.Request("GET", f"https://api.ebay.com{path}")
         if path == "/sell/inventory/v1/inventory_item":
@@ -97,7 +97,7 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_best_image(monkeypatch
     assert items[0].sku == "EBAY-123456789012"
     assert items[0].quantity == 2
     assert items[0].listing_status == "IN_STOCK"
-    assert items[0].image_url == "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"
+    assert items[0].image_url == "https://i.ebayimg.com/images/g/demo/s-l300.jpg"
     assert items[0].image_urls == [
         "https://i.ebayimg.com/images/g/demo/s-l300.jpg",
         "https://i.ebayimg.com/images/g/demo/s-l1600.jpg",

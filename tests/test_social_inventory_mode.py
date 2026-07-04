@@ -76,6 +76,10 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
     assert len(batch.posts) == 2
     assert [post.product_sku for post in batch.posts] == ["EBAY-1", "EBAY-2"]
     assert len(batch.metricool_payloads) == 2
+    expected_media_by_sku = {
+        "EBAY-1": "https://example.com/iphone.jpg",
+        "EBAY-2": "https://example.com/samsung.jpg",
+    }
     for payload in batch.metricool_payloads:
         assert payload["facebook"] is True
         assert payload["instagram"] is True
@@ -83,10 +87,7 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
         assert payload["linkedin"] is True
         assert payload["as_draft"] is False
         assert payload["auto_publish"] is True
-        assert (
-            payload["media_01"]
-            == "https://raw.githubusercontent.com/seanfouz-source/horizon-ai-agents-live/main/assets/horizon-summer-sale-square.jpg"
-        )
+        assert payload["media_01"] == expected_media_by_sku[payload["product_sku"]]
         assert payload["publication_date_time"].startswith("2026-05-29")
         assert payload["post_content"].startswith("Horizon Wireless Summer Sale spotlight:")
         assert "Shop the full Horizon Wireless sale on our eBay store: https://www.ebay.com/str/exactspec" in payload[
@@ -245,7 +246,7 @@ def test_all_inventory_mode_excludes_demo_rows(monkeypatch):
     assert [post.product_sku for post in batch.posts] == ["EBAY-1"]
 
 
-def test_all_inventory_mode_allows_sale_and_store_page_overrides(monkeypatch):
+def test_all_inventory_mode_keeps_listing_image_with_sale_and_store_page_overrides(monkeypatch):
     items = [
         InventoryItem(
             sku="EBAY-1",
@@ -283,7 +284,39 @@ def test_all_inventory_mode_allows_sale_and_store_page_overrides(monkeypatch):
     assert "Shop the full Horizon Wireless sale on our eBay store: https://www.ebay.com/str/exactspec" in batch.metricool_payloads[0][
         "post_content"
     ]
-    assert batch.metricool_payloads[0]["media_01"] == "https://example.com/summer-sale.jpg"
+    assert batch.metricool_payloads[0]["media_01"] == "https://example.com/iphone.jpg"
+
+
+def test_all_inventory_mode_allows_explicit_media_url_override(monkeypatch):
+    items = [
+        InventoryItem(
+            sku="EBAY-1",
+            title="Apple iPhone 14 Pro Max",
+            condition="Open box",
+            price=565,
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/1",
+            image_url="https://example.com/iphone.jpg",
+        )
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: ["2026-05-29 08:00:00"],
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(
+                promote_all_inventory=True,
+                brand_name="Horizon Wireless",
+                media_url="https://example.com/campaign-video.mp4",
+            )
+        )
+    )
+
+    assert batch.metricool_payloads[0]["media_01"] == "https://example.com/campaign-video.mp4"
 
 
 def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):

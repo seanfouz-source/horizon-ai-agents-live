@@ -918,7 +918,7 @@ def _inventory_social_post(
         product_sku=item.sku,
         product_title=item.title,
         ebay_url=_buy_url_for_item(item),
-        media_url=media_url or request.media_url or _sale_media_url_for_request(request) or item.image_url,
+        media_url=media_url or request.media_url or item.image_url or _sale_media_url_for_request(request),
         hashtags=_hashtags_for_item(item),
     )
 

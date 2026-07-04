@@ -214,7 +214,7 @@ class EbayClient:
             description=product.get("description"),
             condition=raw_item.get("condition"),
             quantity=int(availability.get("quantity") or 0),
-            image_url=self._best_image_url(image_urls),
+            image_url=self._primary_image_url(image_urls),
             image_urls=image_urls,
             item_specifics=item_specifics,
             source="ebay-api",
@@ -256,7 +256,7 @@ class EbayClient:
             quantity=availability["quantity"],
             ebay_item_id=legacy_item_id,
             ebay_url=raw_item.get("itemWebUrl") or (f"https://www.ebay.com/itm/{legacy_item_id}" if legacy_item_id else None),
-            image_url=self._best_image_url(image_urls),
+            image_url=self._primary_image_url(image_urls),
             image_urls=image_urls,
             category=category,
             listing_status=availability["status"],
@@ -372,11 +372,11 @@ class EbayClient:
                         urls.append(str(image["imageUrl"]))
         return self._dedupe_urls(urls)
 
-    def _best_image_url(self, urls: list[str]) -> str | None:
+    def _primary_image_url(self, urls: list[str]) -> str | None:
         usable_urls = [url for url in self._dedupe_urls(urls) if self._usable_image_url(url)]
         if not usable_urls:
             return None
-        return max(usable_urls, key=self._image_quality_score)
+        return usable_urls[0]
 
     @staticmethod
     def _usable_image_url(url: str) -> bool:
@@ -385,16 +385,6 @@ class EbayClient:
             marker in lowered
             for marker in (".jpg", ".jpeg", ".png", ".webp", "/images/", "i.ebayimg.com")
         )
-
-    @staticmethod
-    def _image_quality_score(url: str) -> tuple[int, int]:
-        lowered = url.lower()
-        size_score = 0
-        size_match = re.search(r"s-l(\d+)", lowered)
-        if size_match:
-            size_score = int(size_match.group(1))
-        extension_score = 2 if lowered.split("?")[0].endswith((".jpg", ".jpeg", ".webp")) else 1
-        return size_score, extension_score
 
     @staticmethod
     def _dedupe_urls(urls: list[str]) -> list[str]:
