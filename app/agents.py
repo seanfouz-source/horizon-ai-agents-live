@@ -627,17 +627,16 @@ async def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> So
         )
 
     posts: list[SocialPost] = []
-    campaign_media_url = request_campaign_media_url(request)
     if request.cross_post_to_all_platforms:
         platform = request.platforms[0] if request.platforms else "facebook"
         posts = [
-            _inventory_social_post(item, request, platform=platform, media_url=campaign_media_url)
+            _inventory_social_post(item, request, platform=platform)
             for item in items
         ]
     else:
         for item in items:
             for platform in request.platforms:
-                posts.append(_inventory_social_post(item, request, platform=platform, media_url=campaign_media_url))
+                posts.append(_inventory_social_post(item, request, platform=platform))
 
     metricool_counts = await _metricool_existing_counts(len(posts), request)
     posts = _schedule_metricool_posts(repository, posts, request, metricool_counts)
@@ -912,13 +911,14 @@ def _inventory_social_post(
     platform: str,
     media_url: str | None = None,
 ) -> SocialPost:
+    media_url = item.image_url or media_url or request.media_url or _sale_media_url_for_request(request)
     return SocialPost(
         platform=cast(SocialPlatform, platform),
         text=_inventory_post_text(item, request, platform),
         product_sku=item.sku,
         product_title=item.title,
         ebay_url=_buy_url_for_item(item),
-        media_url=media_url or request.media_url or item.image_url or _sale_media_url_for_request(request),
+        media_url=media_url,
         hashtags=_hashtags_for_item(item),
     )
 

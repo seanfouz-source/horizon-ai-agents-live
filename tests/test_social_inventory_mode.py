@@ -287,7 +287,7 @@ def test_all_inventory_mode_keeps_listing_image_with_sale_and_store_page_overrid
     assert batch.metricool_payloads[0]["media_01"] == "https://example.com/iphone.jpg"
 
 
-def test_all_inventory_mode_allows_explicit_media_url_override(monkeypatch):
+def test_all_inventory_mode_uses_listing_image_even_with_explicit_media_url(monkeypatch):
     items = [
         InventoryItem(
             sku="EBAY-1",
@@ -316,7 +316,7 @@ def test_all_inventory_mode_allows_explicit_media_url_override(monkeypatch):
         )
     )
 
-    assert batch.metricool_payloads[0]["media_01"] == "https://example.com/campaign-video.mp4"
+    assert batch.metricool_payloads[0]["media_01"] == "https://example.com/iphone.jpg"
 
 
 def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):
