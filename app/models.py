@@ -72,7 +72,7 @@ class SocialDraftRequest(BaseModel):
     campaign_video: str | None = None
     facebook_groups: list[str] = Field(default_factory=list)
     publish_to_facebook_groups: bool = False
-    tiktok_daily_post_cap: int = Field(default=3, ge=0, le=15)
+    tiktok_daily_post_cap: int = Field(default=200, ge=0, le=200)
     publish_after: str | None = None
     as_draft: bool = True
     auto_publish: bool = False
