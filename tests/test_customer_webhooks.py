@@ -472,3 +472,29 @@ def test_meta_facebook_webhook_verifies_signature(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["queued"] == 1
+
+
+def test_meta_facebook_webhook_accepts_legacy_sha1_signature(monkeypatch):
+    import app.main as main_module
+
+    payload = json.dumps(meta_page_comment_payload()).encode("utf-8")
+    signature = hmac.new(b"app-secret", payload, hashlib.sha1).hexdigest()
+
+    FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {}
+    monkeypatch.setattr(main_module.settings, "facebook_app_secret", "app-secret")
+    monkeypatch.setattr(main_module.settings, "facebook_page_access_token", "page-token")
+    monkeypatch.setattr(main_module.settings, "facebook_page_name", "Horizon Wireless")
+    monkeypatch.setattr(main_module, "_refresh_inventory_for_social_posts", fake_refresh_inventory)
+    monkeypatch.setattr(main_module, "answer_customer_question", fake_answer_facebook_comment)
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", FakeFacebookAsyncClient)
+
+    client = TestClient(main_module.app)
+    response = client.post(
+        "/webhooks/meta/facebook",
+        content=payload,
+        headers={"Content-Type": "application/json", "X-Hub-Signature": f"sha1={signature}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queued"] == 1

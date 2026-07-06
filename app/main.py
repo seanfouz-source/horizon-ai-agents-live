@@ -619,7 +619,10 @@ async def meta_facebook_webhook(
     background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     raw_body = await request.body()
-    _verify_facebook_webhook_signature(raw_body, request.headers.get("x-hub-signature-256"))
+    _verify_facebook_webhook_signature(
+        raw_body,
+        request.headers.get("x-hub-signature-256") or request.headers.get("x-hub-signature"),
+    )
     try:
         payload = json.loads(raw_body or b"{}")
     except json.JSONDecodeError as exc:
@@ -645,6 +648,15 @@ async def meta_facebook_webhook(
             continue
         background_tasks.add_task(_handle_meta_facebook_messenger_event, event)
         queued += 1
+
+    logger.info(
+        "Meta Facebook webhook accepted: object=%s comment_events=%s messenger_events=%s queued=%s skipped=%s",
+        payload.get("object"),
+        len(comment_events),
+        len(messenger_events),
+        queued,
+        skipped,
+    )
 
     return {
         "status": "accepted",
@@ -1185,11 +1197,23 @@ def _verify_facebook_webhook_signature(raw_body: bytes, signature_header: str | 
     app_secret = settings.facebook_app_secret
     if not app_secret:
         return
-    if not signature_header or not signature_header.startswith("sha256="):
+    if not signature_header or "=" not in signature_header:
+        logger.warning("Meta Facebook webhook rejected: missing signature header.")
         raise HTTPException(status_code=401, detail="Missing Facebook webhook signature.")
-    expected_signature = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    received_signature = signature_header.split("=", maxsplit=1)[1]
+
+    algorithm_name, received_signature = signature_header.split("=", maxsplit=1)
+    algorithm_name = algorithm_name.lower().strip()
+    if algorithm_name == "sha256":
+        digestmod = hashlib.sha256
+    elif algorithm_name == "sha1":
+        digestmod = hashlib.sha1
+    else:
+        logger.warning("Meta Facebook webhook rejected: unsupported signature algorithm=%s.", algorithm_name)
+        raise HTTPException(status_code=401, detail="Unsupported Facebook webhook signature algorithm.")
+
+    expected_signature = hmac.new(app_secret.encode("utf-8"), raw_body, digestmod).hexdigest()
     if not secrets.compare_digest(received_signature, expected_signature):
+        logger.warning("Meta Facebook webhook rejected: invalid %s signature.", algorithm_name)
         raise HTTPException(status_code=401, detail="Invalid Facebook webhook signature.")
 
 
