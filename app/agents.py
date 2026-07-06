@@ -1266,13 +1266,7 @@ def _metricool_platform_label(payload: dict[str, object]) -> str:
 
 
 def _post_ebay_item_id(post: SocialPost) -> str | None:
-    if post.ebay_url:
-        match = re.search(r"/itm/(?:[^/?#]+/)?(\d+)", post.ebay_url)
-        if match:
-            return match.group(1)
-    if post.product_sku and post.product_sku.startswith("EBAY-"):
-        return post.product_sku.removeprefix("EBAY-")
-    return post.product_sku
+    return _canonical_ebay_item_id(post.ebay_url) or _canonical_ebay_item_id(post.product_sku)
 
 
 def _apply_tiktok_cap_to_batch(batch: SocialDraftBatch, daily_cap: int) -> None:
@@ -1382,15 +1376,35 @@ def _is_ebay_listing(item: InventoryItem) -> bool:
 
 
 def _item_ebay_item_id(item: InventoryItem) -> str | None:
-    if item.ebay_item_id:
-        return item.ebay_item_id
-    if item.ebay_url:
-        match = re.search(r"/itm/(?:[^/?#]+/)?(\d+)", item.ebay_url)
-        if match:
-            return match.group(1)
-    if item.sku.startswith("EBAY-"):
-        return item.sku.removeprefix("EBAY-")
-    return None
+    return (
+        _canonical_ebay_item_id(item.ebay_url)
+        or _canonical_ebay_item_id(item.ebay_item_id)
+        or _canonical_ebay_item_id(item.sku)
+    )
+
+
+def _canonical_ebay_item_id(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    url_match = re.search(r"/itm/(?:[^/?#]+/)?(\d+)", text)
+    if url_match:
+        return url_match.group(1)
+
+    if text.startswith("EBAY-"):
+        text = text.removeprefix("EBAY-")
+    if text.isdigit():
+        return text
+
+    composite_match = re.search(r"(?:^|[|:/_-])(\d{9,})(?:$|[|:/_?#-])", text)
+    if composite_match:
+        return composite_match.group(1)
+
+    return text
 
 
 def _looks_like_phone(item: InventoryItem) -> bool:

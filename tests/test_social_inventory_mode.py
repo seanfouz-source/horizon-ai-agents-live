@@ -625,6 +625,56 @@ def test_all_inventory_mode_rotates_through_full_store_inventory(tmp_path, monke
     assert [payload["linkedin"] for payload in batch.metricool_payloads] == [True, True]
 
 
+def test_all_inventory_mode_matches_composite_ebay_ids_to_history(tmp_path, monkeypatch):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku=f"EBAY-36600000000{index}",
+                ebay_item_id=f"v1|36600000000{index}|0",
+                title=f"Store Listing {index}",
+                quantity=1,
+                ebay_url=f"https://www.ebay.com/itm/36600000000{index}",
+                image_url=f"https://i.ebayimg.com/images/g/{index}/s-l1600.jpg",
+                listing_status="ACTIVE",
+                source="ebay-browse-api",
+            )
+            for index in range(1, 5)
+        ]
+    )
+    for index in range(1, 3):
+        repository.record_social_post(
+            ebay_item_id=f"36600000000{index}",
+            sku=f"EBAY-36600000000{index}",
+            title=f"Store Listing {index}",
+            item_url=f"https://www.ebay.com/itm/36600000000{index}",
+            image_url=f"https://i.ebayimg.com/images/g/{index}/s-l1600.jpg",
+            caption="Queued earlier",
+            scheduled_at=f"2026-07-02 09:{(index - 1) * 30:02d}:00",
+            platform="facebook,instagram,tiktok,linkedin",
+        )
+
+    monkeypatch.setattr(agents_module, "get_repository", lambda: repository)
+    monkeypatch.setattr(
+        agents_module,
+        "_inventory_metricool_publication_times",
+        inventory_half_hour_slots,
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(
+                promote_all_inventory=True,
+                max_products_per_run=2,
+                brand_name="Horizon Wireless",
+                platforms=["facebook", "instagram", "tiktok", "linkedin"],
+            )
+        )
+    )
+
+    assert {post.product_sku for post in batch.posts} == {"EBAY-366000000003", "EBAY-366000000004"}
+
+
 def test_all_inventory_mode_respects_existing_hourly_history(tmp_path, monkeypatch):
     repository = InventoryRepository(tmp_path / "inventory.db")
     repository.record_social_post(
