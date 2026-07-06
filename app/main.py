@@ -176,9 +176,9 @@ def _cancel_test_inventory_social_history() -> None:
                 error_message = 'Cancelled temporary production test queue before live Zap run.',
                 updated_at = ?
             WHERE status = 'scheduled'
-            AND metricool_post_id IS NULL
-            AND platform = 'facebook,instagram,tiktok,linkedin'
-            AND item_url LIKE 'https://www.ebay.com/itm/%'
+            AND posted_at IS NULL
+            AND (metricool_post_id IS NULL OR metricool_post_id = '')
+            AND item_url LIKE '%ebay.com/itm/%'
             """,
             (now,),
         )
