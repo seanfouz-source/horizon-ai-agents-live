@@ -521,11 +521,11 @@ async def group_reply(request: GroupReplyRequest) -> dict[str, Any]:
 
 @app.post("/webhooks/manychat")
 async def manychat_webhook(
-    payload: dict[str, Any],
     request: Request,
     x_horizon_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    payload = await parse_zapier_body(request)
     message = extract_customer_message(payload)
     if not message:
         raise HTTPException(status_code=400, detail="No customer message found in payload.")
@@ -538,11 +538,11 @@ async def manychat_webhook(
 
 @app.post("/webhooks/zapier/customer-question")
 async def zapier_customer_question(
-    payload: dict[str, Any],
     request: Request,
     x_horizon_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    payload = await parse_zapier_body(request)
     message = extract_customer_message(payload)
     if not message:
         raise HTTPException(status_code=400, detail="No customer message found in payload.")
@@ -593,11 +593,11 @@ async def zapier_group_reply(
 
 @app.post("/webhooks/metricool/inbox")
 async def metricool_inbox_webhook(
-    payload: dict[str, Any],
     request: Request,
     x_horizon_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    payload = await parse_zapier_body(request)
     message = extract_customer_message(payload)
     if not message:
         raise HTTPException(status_code=400, detail="No conversation text found in payload.")
