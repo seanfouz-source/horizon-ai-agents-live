@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -90,10 +91,8 @@ def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatc
         assert payload["media_01"] == expected_media_by_sku[payload["product_sku"]]
         assert payload["publication_date_time"].startswith("2026-05-29")
         assert payload["post_content"].startswith("Horizon Wireless Summer Sale spotlight:")
-        assert "Shop the full Horizon Wireless sale on our eBay store: https://www.ebay.com/str/exactspec" in payload[
-            "post_content"
-        ]
-        assert "\nView this listing: https://www.ebay.com/itm/" in payload["post_content"]
+        assert "Available while supplies last." in payload["post_content"]
+        assert "\nShop Now - Buy direct on eBay: https://www.ebay.com/itm/" in payload["post_content"]
         assert payload["buy_url"] == payload["ebay_url"]
         assert payload["link_url"] == payload["ebay_url"]
         assert payload["facebook_link_url"] == payload["ebay_url"]
@@ -281,9 +280,7 @@ def test_all_inventory_mode_keeps_listing_image_with_sale_and_store_page_overrid
     assert "Horizon Wireless Summer Sale spotlight: Apple iPhone 14 Pro Max" in batch.metricool_payloads[0][
         "post_content"
     ]
-    assert "Shop the full Horizon Wireless sale on our eBay store: https://www.ebay.com/str/exactspec" in batch.metricool_payloads[0][
-        "post_content"
-    ]
+    assert "Shop Now - Buy direct on eBay: https://www.ebay.com/itm/1" in batch.metricool_payloads[0]["post_content"]
     assert batch.metricool_payloads[0]["media_01"] == "https://example.com/iphone.jpg"
 
 
@@ -317,6 +314,69 @@ def test_all_inventory_mode_uses_listing_image_even_with_explicit_media_url(monk
     )
 
     assert batch.metricool_payloads[0]["media_01"] == "https://example.com/iphone.jpg"
+
+
+def test_all_inventory_mode_skips_missing_image_instead_of_using_banner(monkeypatch, caplog):
+    items = [
+        InventoryItem(
+            sku="EBAY-1",
+            ebay_item_id="1",
+            title="Apple iPhone 14 Pro Max",
+            condition="Open box",
+            price=565,
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/1",
+            image_url=None,
+            listing_status="ACTIVE",
+        )
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+
+    with caplog.at_level(logging.WARNING, logger="app.agents"):
+        batch = asyncio.run(
+            agents_module.create_social_drafts(
+                SocialDraftRequest(
+                    promote_all_inventory=True,
+                    brand_name="Horizon Wireless",
+                    sale_media_url="https://example.com/banner.jpg",
+                    media_url="https://example.com/banner.jpg",
+                )
+            )
+        )
+
+    assert batch.posts == []
+    assert batch.metricool_payloads == []
+    assert "listing has no valid primary eBay image" in caplog.text
+    assert "https://example.com/banner.jpg" not in caplog.text
+
+
+def test_all_inventory_mode_adds_free_shipping_cta_when_ebay_marks_it_free(monkeypatch):
+    items = [
+        InventoryItem(
+            sku="EBAY-1",
+            title="Samsung Galaxy S25",
+            condition="Open box",
+            price=500,
+            quantity=1,
+            ebay_url="https://www.ebay.com/itm/1",
+            image_url="https://example.com/samsung.jpg",
+            item_specifics={"Shipping": "Free Shipping", "Shipping Cost": "0 USD"},
+        )
+    ]
+    monkeypatch.setattr(agents_module, "get_repository", lambda: FakeRepository(items))
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: ["2026-05-29 08:00:00"],
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(promote_all_inventory=True, brand_name="Horizon Wireless")
+        )
+    )
+
+    assert "Free Shipping available." in batch.metricool_payloads[0]["post_content"]
 
 
 def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):

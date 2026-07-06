@@ -345,7 +345,8 @@ def _csv_value(value: object) -> str | None:
 
 
 def _metricool_media_url(post: SocialPost, request: SocialDraftRequest | None = None) -> str | None:
-    media_url = post.media_url or request_campaign_media_url(request)
+    inventory_post = bool(request and request.promote_all_inventory)
+    media_url = post.media_url if inventory_post else post.media_url or request_campaign_media_url(request)
     needs_tiktok_safe_media = post.platform == "tiktok" or (
         bool(request and request.promote_all_inventory and request.cross_post_to_all_platforms)
         and "tiktok" in (request.platforms if request else [])
@@ -353,7 +354,11 @@ def _metricool_media_url(post: SocialPost, request: SocialDraftRequest | None = 
     if media_url:
         if not needs_tiktok_safe_media or _is_tiktok_supported_media(media_url):
             return media_url
+        if inventory_post:
+            return None
         return generated_product_media_url(post.product_sku)
+    if inventory_post:
+        return None
     return generated_product_media_url(post.product_sku)
 
 

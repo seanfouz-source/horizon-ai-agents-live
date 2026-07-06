@@ -72,6 +72,11 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_primary_image(monkeypa
                     ],
                     "categoryPath": "Cell Phones & Smartphones",
                     "localizedAspects": [{"name": "Storage Capacity", "value": "128 GB"}],
+                    "shippingOptions": [
+                        {
+                            "shippingCost": {"value": "0.00", "currency": "USD"},
+                        }
+                    ],
                     "estimatedAvailabilities": [
                         {
                             "estimatedAvailabilityStatus": "IN_STOCK",
@@ -103,6 +108,112 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_primary_image(monkeypa
         "https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
     ]
     assert items[0].item_specifics["Storage Capacity"] == "128 GB"
+    assert items[0].item_specifics["Shipping"] == "Free Shipping"
+
+
+def test_ebay_client_retries_temporary_browse_api_failures(monkeypatch):
+    calls = {"search": 0}
+
+    async def fake_sleep(delay):
+        return None
+
+    def handler(path, params):
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/inventory_item":
+            return httpx.Response(200, json={"inventoryItems": [], "total": 0}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            calls["search"] += 1
+            if calls["search"] == 1:
+                return httpx.Response(503, json={"error": "temporary"}, request=request)
+            return httpx.Response(
+                200,
+                json={
+                    "itemSummaries": [
+                        {
+                            "itemId": "v1|123456789012|0",
+                            "legacyItemId": "123456789012",
+                            "title": "Samsung Galaxy S25 Blue",
+                            "itemWebUrl": "https://www.ebay.com/itm/123456789012",
+                            "image": {"imageUrl": "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"},
+                            "estimatedAvailabilities": [
+                                {
+                                    "estimatedAvailabilityStatus": "IN_STOCK",
+                                    "estimatedAvailableQuantity": 1,
+                                }
+                            ],
+                        }
+                    ],
+                    "total": 1,
+                },
+                request=request,
+            )
+        if path == "/buy/browse/v1/item/v1|123456789012|0":
+            return httpx.Response(
+                404,
+                json={},
+                request=request,
+            )
+        raise AssertionError(f"Unexpected eBay path: {path}")
+
+    monkeypatch.setattr(ebay_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token="token",
+        ebay_marketplace_id="EBAY_US",
+        ebay_seller_username="exactspec-electronics",
+        ebay_browse_search_query=" ",
+    )
+
+    items = asyncio.run(EbayClient(settings).fetch_inventory_items())
+
+    assert calls["search"] == 2
+    assert [item.ebay_item_id for item in items] == ["123456789012"]
+
+
+def test_ebay_client_skips_browse_listing_without_primary_image(monkeypatch, caplog):
+    def handler(path, params):
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/inventory_item":
+            return httpx.Response(200, json={"inventoryItems": [], "total": 0}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            return httpx.Response(
+                200,
+                json={
+                    "itemSummaries": [
+                        {
+                            "itemId": "v1|123456789012|0",
+                            "legacyItemId": "123456789012",
+                            "title": "Samsung Galaxy S25 Blue",
+                            "itemWebUrl": "https://www.ebay.com/itm/123456789012",
+                            "estimatedAvailabilities": [
+                                {
+                                    "estimatedAvailabilityStatus": "IN_STOCK",
+                                    "estimatedAvailableQuantity": 1,
+                                }
+                            ],
+                        }
+                    ],
+                    "total": 1,
+                },
+                request=request,
+            )
+        if path == "/buy/browse/v1/item/v1|123456789012|0":
+            return httpx.Response(404, json={}, request=request)
+        raise AssertionError(f"Unexpected eBay path: {path}")
+
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token="token",
+        ebay_marketplace_id="EBAY_US",
+        ebay_seller_username="exactspec-electronics",
+        ebay_browse_search_query=" ",
+    )
+
+    with caplog.at_level("WARNING", logger="app.ebay"):
+        items = asyncio.run(EbayClient(settings).fetch_inventory_items())
+
+    assert items == []
+    assert "listing has no valid primary eBay image" in caplog.text
 
 
 def test_ebay_client_refreshes_access_token_before_sync(monkeypatch):

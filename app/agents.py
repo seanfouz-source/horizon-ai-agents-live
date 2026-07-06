@@ -762,10 +762,16 @@ def _record_metricool_payloads(
         )
         payload["history_id"] = history_id
         logger.info(
-            "Reserved Metricool payload for eBay item %s at %s on %s.",
-            _post_ebay_item_id(post) or post.product_sku,
-            scheduled_at,
+            "Inventory social post queued: history_id=%s ebay_item_id=%s sku=%s title=%r image_url=%s "
+            "ebay_url=%s platform=%s scheduled_at=%s status=scheduled error=None",
+            history_id,
+            _post_ebay_item_id(post),
+            post.product_sku,
+            post.product_title,
+            payload.get("media_01") or post.media_url,
+            post.ebay_url,
             _metricool_platform_label(payload),
+            scheduled_at,
         )
 
 
@@ -844,7 +850,13 @@ def _rotate_inventory_items(
     items: list[InventoryItem],
     limit: int,
 ) -> list[InventoryItem]:
-    active_items = [item for item in items if _is_active_promotable_item(item)]
+    active_items = []
+    for item in items:
+        skip_reason = _promotable_skip_reason(item)
+        if skip_reason:
+            _log_skipped_inventory_post(item, skip_reason)
+            continue
+        active_items.append(item)
     if not _repository_supports_post_history(repository):
         return active_items[:limit]
 
@@ -867,12 +879,31 @@ def _rotate_inventory_items(
 
 
 def _is_active_promotable_item(item: InventoryItem) -> bool:
+    return _promotable_skip_reason(item) is None
+
+
+def _promotable_skip_reason(item: InventoryItem) -> str | None:
     if item.quantity <= 0:
-        return False
+        return "listing has no available quantity"
     if not item.image_url:
-        return False
+        return "listing has no valid primary eBay image"
     status = (item.listing_status or "ACTIVE").strip().upper()
-    return status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"}
+    if status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"}:
+        return None
+    return f"listing status is {status}"
+
+
+def _log_skipped_inventory_post(item: InventoryItem, reason: str) -> None:
+    logger.warning(
+        "Skipping eBay listing for automated inventory social post: ebay_item_id=%s sku=%s title=%r "
+        "image_url=%s ebay_url=%s platform=inventory-queue scheduled_at=None status=skipped error=%s",
+        _item_ebay_item_id(item),
+        item.sku,
+        item.title,
+        item.image_url,
+        _buy_url_for_item(item),
+        reason,
+    )
 
 
 def _is_ebay_listing(item: InventoryItem) -> bool:
@@ -909,16 +940,14 @@ def _inventory_social_post(
     item: InventoryItem,
     request: SocialDraftRequest,
     platform: str,
-    media_url: str | None = None,
 ) -> SocialPost:
-    media_url = item.image_url or media_url or request.media_url or _sale_media_url_for_request(request)
     return SocialPost(
         platform=cast(SocialPlatform, platform),
         text=_inventory_post_text(item, request, platform),
         product_sku=item.sku,
         product_title=item.title,
         ebay_url=_buy_url_for_item(item),
-        media_url=media_url,
+        media_url=item.image_url,
         hashtags=_hashtags_for_item(item),
     )
 
@@ -926,18 +955,27 @@ def _inventory_social_post(
 def _inventory_post_text(item: InventoryItem, request: SocialDraftRequest, platform: str) -> str:
     brand = request.brand_name or "Horizon Wireless"
     sale_name = (request.sale_name or f"{brand} eBay Store Sale").strip()
-    store_url = _store_url_for_request(request)
     price = f"Price: ${item.price:,.2f}" if item.price is not None else "Price: See eBay listing"
     condition = f"Condition: {item.condition}" if item.condition else "Condition: See eBay listing"
     url = _buy_url_for_item(item)
     title = item.title.strip()
-    return (
-        f"{sale_name} spotlight: {title}\n\n"
-        f"{condition}\n"
-        f"{price}\n\n"
-        f"Shop the full {brand} sale on our eBay store: {store_url}\n"
-        f"View this listing: {url}"
+    lines = [
+        f"{sale_name} spotlight: {title}",
+        "",
+        condition,
+        price,
+    ]
+    free_shipping_line = _free_shipping_line(item)
+    if free_shipping_line:
+        lines.append(free_shipping_line)
+    lines.extend(
+        [
+            "",
+            "Available while supplies last.",
+            f"Shop Now - Buy direct on eBay: {url}",
+        ]
     )
+    return "\n".join(lines)
 
 
 def _inventory_campaign_name(request: SocialDraftRequest) -> str:
@@ -955,13 +993,6 @@ def _store_url_for_request(request: SocialDraftRequest) -> str:
     return get_settings().ebay_store_url
 
 
-def _sale_media_url_for_request(request: SocialDraftRequest) -> str | None:
-    configured = (request.sale_media_url or "").strip()
-    if configured:
-        return configured
-    return get_settings().ebay_store_sale_media_url
-
-
 def _buy_url_for_item(item: InventoryItem) -> str:
     if item.ebay_item_id:
         return f"https://www.ebay.com/itm/{item.ebay_item_id}"
@@ -976,6 +1007,16 @@ def _canonical_ebay_item_url(url: str) -> str | None:
     if not match:
         return None
     return f"https://www.ebay.com/itm/{match.group(1)}"
+
+
+def _free_shipping_line(item: InventoryItem) -> str | None:
+    specifics = " ".join(
+        f"{key} {value}"
+        for key, value in item.item_specifics.items()
+    ).lower()
+    if "free shipping" in specifics or "shipping cost 0 " in specifics:
+        return "Free Shipping available."
+    return None
 
 
 def _price_text(item: InventoryItem) -> str:

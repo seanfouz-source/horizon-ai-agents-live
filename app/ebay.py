@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from base64 import b64encode
@@ -11,6 +12,8 @@ from app.models import InventoryItem
 
 
 logger = logging.getLogger(__name__)
+RETRY_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 
 
 class EbayClient:
@@ -52,7 +55,8 @@ class EbayClient:
         async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
             await self._ensure_access_token(client)
             while True:
-                response = await client.get(
+                response = await self._get(
+                    client,
                     "/sell/inventory/v1/inventory_item",
                     params={"limit": page_size, "offset": offset},
                     headers=self._headers(),
@@ -69,6 +73,8 @@ class EbayClient:
                     item = self._apply_offer(item, offer)
                     if self._is_active_available_listing(item):
                         items.append(item)
+                    else:
+                        self._log_skipped_listing(item, self._listing_skip_reason(item))
 
                 offset += len(raw_items)
                 if offset >= int(payload.get("total", offset)) or len(raw_items) < page_size:
@@ -88,7 +94,8 @@ class EbayClient:
         async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
             await self._ensure_access_token(client)
             while len(items) < limit:
-                response = await client.get(
+                response = await self._get(
+                    client,
                     "/buy/browse/v1/item_summary/search",
                     params={
                         "q": query,
@@ -109,10 +116,20 @@ class EbayClient:
                     if not item_id or item_id in seen_item_ids:
                         continue
                     seen_item_ids.add(item_id)
-                    detail = await self._fetch_browse_item_detail(client, item_id)
+                    try:
+                        detail = await self._fetch_browse_item_detail(client, item_id)
+                    except httpx.HTTPError as exc:
+                        logger.warning(
+                            "Skipping eBay Browse item %s because detail fetch failed after retries: %s",
+                            item_id,
+                            exc,
+                        )
+                        continue
                     item = self._normalize_browse_item({**summary, **detail})
                     if self._is_active_available_listing(item):
                         items.append(item)
+                    else:
+                        self._log_skipped_listing(item, self._listing_skip_reason(item))
                     if len(items) >= limit:
                         break
 
@@ -123,7 +140,8 @@ class EbayClient:
         return items
 
     async def _fetch_browse_item_detail(self, client: httpx.AsyncClient, item_id: str) -> dict[str, Any]:
-        response = await client.get(
+        response = await self._get(
+            client,
             f"/buy/browse/v1/item/{item_id}",
             headers=self._headers(),
         )
@@ -179,7 +197,8 @@ class EbayClient:
         }
         if scopes:
             data["scope"] = scopes
-        response = await client.post(
+        response = await self._post(
+            client,
             "/identity/v1/oauth2/token",
             data=data,
             headers={
@@ -209,7 +228,8 @@ class EbayClient:
         }
         if scopes:
             data["scope"] = scopes
-        response = await client.post(
+        response = await self._post(
+            client,
             "/identity/v1/oauth2/token",
             data=data,
             headers={
@@ -227,7 +247,8 @@ class EbayClient:
         return access_token.strip()
 
     async def _fetch_offer(self, client: httpx.AsyncClient, sku: str) -> dict[str, Any]:
-        response = await client.get(
+        response = await self._get(
+            client,
             "/sell/inventory/v1/offer",
             params={"sku": sku},
             headers=self._headers(),
@@ -307,14 +328,33 @@ class EbayClient:
         )
 
     def _is_active_available_listing(self, item: InventoryItem) -> bool:
+        return self._listing_skip_reason(item) is None
+
+    @staticmethod
+    def _listing_skip_reason(item: InventoryItem) -> str | None:
         if item.quantity <= 0:
-            return False
+            return "listing has no available quantity"
         if not item.image_url:
-            return False
+            return "listing has no valid primary eBay image"
         status = (item.listing_status or "ACTIVE").strip().upper()
         if status in {"SOLD", "ENDED", "INACTIVE", "OUT_OF_STOCK", "UNAVAILABLE"}:
-            return False
-        return status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"} or not item.listing_status
+            return f"listing status is {status}"
+        if status in {"ACTIVE", "IN_STOCK", "PUBLISHED", "LIVE"} or not item.listing_status:
+            return None
+        return f"listing status is {status}"
+
+    @staticmethod
+    def _log_skipped_listing(item: InventoryItem, reason: str | None) -> None:
+        logger.warning(
+            "Skipping eBay listing for inventory social automation: ebay_item_id=%s sku=%s title=%r "
+            "image_url=%s ebay_url=%s status=skipped error=%s",
+            item.ebay_item_id,
+            item.sku,
+            item.title,
+            item.image_url,
+            item.ebay_url,
+            reason or "not promotable",
+        )
 
     @staticmethod
     def _legacy_item_id(raw_item: dict[str, Any]) -> str | None:
@@ -390,7 +430,28 @@ class EbayClient:
             value = raw_item.get(field)
             if value:
                 item_specifics[field] = str(value)
+        item_specifics.update(EbayClient._browse_shipping_specifics(raw_item))
         return item_specifics
+
+    @staticmethod
+    def _browse_shipping_specifics(raw_item: dict[str, Any]) -> dict[str, str]:
+        shipping_options = raw_item.get("shippingOptions")
+        if not isinstance(shipping_options, list):
+            return {}
+        for option in shipping_options:
+            if not isinstance(option, dict):
+                continue
+            shipping_cost = option.get("shippingCost") or option.get("shippingCostConverted")
+            if not isinstance(shipping_cost, dict):
+                continue
+            value = EbayClient._float_value(shipping_cost.get("value"))
+            currency = str(shipping_cost.get("currency") or "USD")
+            if value is None:
+                continue
+            if value == 0:
+                return {"Shipping": "Free Shipping", "Shipping Cost": f"0 {currency}"}
+            return {"Shipping Cost": f"{value:g} {currency}"}
+        return {}
 
     def _image_urls_from_sell_product(self, product: dict[str, Any]) -> list[str]:
         urls: list[str] = []
@@ -438,3 +499,72 @@ class EbayClient:
             seen.add(clean_url)
             deduped.append(clean_url)
         return deduped
+
+    async def _get(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        params: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return await self._request_with_retry(client, "GET", path, params=params, headers=headers)
+
+    async def _post(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        data: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return await self._request_with_retry(client, "POST", path, data=data, headers=headers)
+
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, object] | None = None,
+        data: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        last_exc: httpx.HTTPError | None = None
+        for attempt, delay in enumerate((*RETRY_DELAYS_SECONDS, 0.0), start=1):
+            try:
+                if method == "POST":
+                    response = await client.post(path, data=data, headers=headers)
+                else:
+                    response = await client.get(path, params=params, headers=headers)
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if delay:
+                    logger.warning(
+                        "Temporary eBay %s %s failure on attempt %s; retrying in %.1fs: %s",
+                        method,
+                        path,
+                        attempt,
+                        delay,
+                        exc.__class__.__name__,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
+            if response.status_code in RETRY_STATUS_CODES and delay:
+                logger.warning(
+                    "Temporary eBay %s %s HTTP %s on attempt %s; retrying in %.1fs.",
+                    method,
+                    path,
+                    response.status_code,
+                    attempt,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            return response
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"eBay {method} {path} failed before returning a response.")

@@ -300,7 +300,7 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
             product_sku="EBAY-123",
             product_title="Demo Phone",
             ebay_url="https://www.ebay.com/itm/123",
-            media_url="https://example.com/product-card.png",
+            media_url="https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
         ),
         SocialDraftRequest(
             brand_name="Horizon Wireless",
@@ -317,10 +317,30 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
     assert payload["linkedin"] is True
     assert payload["publicationDate"] == payload["publication_date_time"]
     assert payload["draft"] is False
-    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+    assert payload["media_01"] == "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"
     assert payload["buy_url"] == "https://www.ebay.com/itm/123"
     assert payload["link_url"] == "https://www.ebay.com/itm/123"
     assert payload["facebook_link_url"] == "https://www.ebay.com/itm/123"
+
+
+def test_metricool_payload_inventory_posts_never_fall_back_to_banner_media():
+    payload = metricool_payload(
+        SocialPost(
+            platform="facebook",
+            text="Shop this listing.",
+            product_sku="EBAY-123",
+            product_title="Demo Phone",
+            ebay_url="https://www.ebay.com/itm/123",
+        ),
+        SocialDraftRequest(
+            brand_name="Horizon Wireless",
+            promote_all_inventory=True,
+            sale_media_url="https://example.com/banner.jpg",
+            media_url="https://example.com/banner.jpg",
+        ),
+    )
+
+    assert "media_01" not in payload
 
 
 def test_apply_tiktok_daily_post_cap_keeps_other_platforms_active():
