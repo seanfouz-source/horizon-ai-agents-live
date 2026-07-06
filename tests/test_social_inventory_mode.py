@@ -427,7 +427,7 @@ def test_all_phones_query_looks_past_non_phone_first_items(monkeypatch):
     assert [post.product_sku for post in batch.posts] == ["EBAY-1", "EBAY-2"]
 
 
-def test_all_inventory_mode_records_history_and_blocks_same_day_rerun(tmp_path, monkeypatch):
+def test_all_inventory_mode_records_history_and_cycles_after_full_rotation(tmp_path, monkeypatch):
     repository = InventoryRepository(tmp_path / "inventory.db")
     repository.upsert_items(
         [
@@ -454,6 +454,10 @@ def test_all_inventory_mode_records_history_and_blocks_same_day_rerun(tmp_path, 
             "2026-07-02 18:00:00",
             "2026-07-03 09:00:00",
             "2026-07-03 18:00:00",
+            "2026-07-04 09:00:00",
+            "2026-07-04 18:00:00",
+            "2026-07-05 09:00:00",
+            "2026-07-05 18:00:00",
         ][:count],
     )
 
@@ -467,7 +471,6 @@ def test_all_inventory_mode_records_history_and_blocks_same_day_rerun(tmp_path, 
     )
 
     first_batch = asyncio.run(agents_module.create_social_drafts(request))
-    second_batch = asyncio.run(agents_module.create_social_drafts(request))
 
     assert [payload["publication_date_time"] for payload in first_batch.metricool_payloads] == [
         "2026-07-02 09:00:00",
@@ -476,7 +479,15 @@ def test_all_inventory_mode_records_history_and_blocks_same_day_rerun(tmp_path, 
     ]
     assert repository.social_post_count_for_day("2026-07-02") == 2
     assert repository.social_post_count_for_day("2026-07-03") == 1
-    assert second_batch.posts == []
+
+    second_batch = asyncio.run(agents_module.create_social_drafts(request))
+
+    assert [post.product_sku for post in second_batch.posts] == ["EBAY-3", "EBAY-2", "EBAY-1"]
+    assert [payload["publication_date_time"] for payload in second_batch.metricool_payloads] == [
+        "2026-07-03 09:00:00",
+        "2026-07-04 09:00:00",
+        "2026-07-04 18:00:00",
+    ]
 
 
 def test_all_inventory_mode_respects_existing_daily_history(tmp_path, monkeypatch):

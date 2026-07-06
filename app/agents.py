@@ -870,7 +870,7 @@ def _rotate_inventory_items(
         if (_item_ebay_item_id(item) not in recent_item_ids)
     ]
     if not eligible_items:
-        return []
+        eligible_items = active_items
 
     return sorted(
         eligible_items,
