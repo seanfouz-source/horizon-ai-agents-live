@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     facebook_page_id: str | None = None
     facebook_page_name: str = "Horizon Wireless"
     facebook_graph_api_version: str = "v20.0"
+    facebook_webhook_verify_token: str | None = None
+    facebook_app_secret: str | None = None
     webhook_shared_secret: str | None = None
     ebay_access_token: str | None = None
     ebay_client_id: str | None = None

@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 
 import httpx
 from fastapi.testclient import TestClient
@@ -56,6 +58,32 @@ def facebook_comment_payload():
         "post_id": "post_12345",
         "comment_id": "comment_12345",
         "permalink_url": "https://facebook.com/post/comment",
+    }
+
+
+def meta_page_comment_payload():
+    return {
+        "object": "page",
+        "entry": [
+            {
+                "id": "1176323222221637",
+                "time": 1783350000,
+                "changes": [
+                    {
+                        "field": "feed",
+                        "value": {
+                            "item": "comment",
+                            "verb": "add",
+                            "post_id": "post_12345",
+                            "comment_id": "comment_12345",
+                            "parent_id": "post_12345",
+                            "message": "Do you have any iPhones?",
+                            "from": {"id": "customer-123", "name": "Customer"},
+                        },
+                    }
+                ],
+            }
+        ],
     }
 
 
@@ -235,3 +263,117 @@ def test_facebook_comment_auto_reply_requires_page_token(monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["detail"] == "FACEBOOK_PAGE_ACCESS_TOKEN is not configured."
+
+
+def test_meta_facebook_webhook_verification_returns_challenge(monkeypatch):
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module.settings, "facebook_webhook_verify_token", "verify-token")
+
+    client = TestClient(main_module.app)
+    response = client.get(
+        "/webhooks/meta/facebook",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "verify-token",
+            "hub.challenge": "challenge-value",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "challenge-value"
+
+
+def test_meta_facebook_webhook_verification_rejects_bad_token(monkeypatch):
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module.settings, "facebook_webhook_verify_token", "verify-token")
+
+    client = TestClient(main_module.app)
+    response = client.get(
+        "/webhooks/meta/facebook",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "wrong-token",
+            "hub.challenge": "challenge-value",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_meta_facebook_webhook_queues_comment_reply(monkeypatch):
+    import app.main as main_module
+
+    FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {}
+    monkeypatch.setattr(main_module.settings, "facebook_page_access_token", "page-token")
+    monkeypatch.setattr(main_module.settings, "facebook_page_name", "Horizon Wireless")
+    monkeypatch.setattr(main_module.settings, "facebook_app_secret", None)
+    monkeypatch.setattr(main_module, "_refresh_inventory_for_social_posts", fake_refresh_inventory)
+    monkeypatch.setattr(main_module, "answer_customer_question", fake_answer_facebook_comment)
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", FakeFacebookAsyncClient)
+
+    client = TestClient(main_module.app)
+    response = client.post("/webhooks/meta/facebook", json=meta_page_comment_payload())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "accepted",
+        "object": "page",
+        "comment_events": 1,
+        "queued": 1,
+        "skipped": 0,
+    }
+    assert FakeFacebookAsyncClient.calls == [
+        (
+            "https://graph.facebook.com/v20.0/comment_12345/comments",
+            {"message": "Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789"},
+            {"Authorization": "Bearer page-token", "Content-Type": "application/json"},
+        )
+    ]
+
+
+def test_meta_facebook_webhook_skips_page_self_comment(monkeypatch):
+    import app.main as main_module
+
+    FakeFacebookAsyncClient.calls = []
+    monkeypatch.setattr(main_module.settings, "facebook_page_name", "Horizon Wireless")
+    monkeypatch.setattr(main_module.settings, "facebook_app_secret", None)
+
+    payload = meta_page_comment_payload()
+    payload["entry"][0]["changes"][0]["value"]["from"]["name"] = "Horizon Wireless"
+
+    client = TestClient(main_module.app)
+    response = client.post("/webhooks/meta/facebook", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["queued"] == 0
+    assert response.json()["skipped"] == 1
+    assert FakeFacebookAsyncClient.calls == []
+
+
+def test_meta_facebook_webhook_verifies_signature(monkeypatch):
+    import app.main as main_module
+
+    payload = json.dumps(meta_page_comment_payload()).encode("utf-8")
+    signature = hmac.new(b"app-secret", payload, hashlib.sha256).hexdigest()
+
+    FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {}
+    monkeypatch.setattr(main_module.settings, "facebook_app_secret", "app-secret")
+    monkeypatch.setattr(main_module.settings, "facebook_page_access_token", "page-token")
+    monkeypatch.setattr(main_module.settings, "facebook_page_name", "Horizon Wireless")
+    monkeypatch.setattr(main_module, "_refresh_inventory_for_social_posts", fake_refresh_inventory)
+    monkeypatch.setattr(main_module, "answer_customer_question", fake_answer_facebook_comment)
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", FakeFacebookAsyncClient)
+
+    client = TestClient(main_module.app)
+    response = client.post(
+        "/webhooks/meta/facebook",
+        content=payload,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": f"sha256={signature}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queued"] == 1

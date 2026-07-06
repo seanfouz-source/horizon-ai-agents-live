@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app.agents import (
@@ -600,6 +600,53 @@ async def zapier_facebook_comment_auto_reply(
     return response
 
 
+@app.get("/webhooks/meta/facebook")
+async def meta_facebook_webhook_verify(request: Request) -> Response:
+    mode = request.query_params.get("hub.mode")
+    verify_token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+    expected_token = settings.facebook_webhook_verify_token or settings.webhook_shared_secret
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="FACEBOOK_WEBHOOK_VERIFY_TOKEN is not configured.")
+    if mode == "subscribe" and verify_token == expected_token and challenge is not None:
+        return Response(content=challenge, media_type="text/plain")
+    raise HTTPException(status_code=403, detail="Invalid Facebook webhook verification token.")
+
+
+@app.post("/webhooks/meta/facebook")
+async def meta_facebook_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    raw_body = await request.body()
+    _verify_facebook_webhook_signature(raw_body, request.headers.get("x-hub-signature-256"))
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Facebook webhook payload must be valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Facebook webhook payload must be a JSON object.")
+
+    events = _facebook_comment_events_from_webhook(payload)
+    queued = 0
+    skipped = 0
+    for event in events:
+        if _is_facebook_page_self_comment(event):
+            skipped += 1
+            logger.info("Meta Facebook webhook skipped page self-comment: comment_id=%s", event.get("comment_id"))
+            continue
+        background_tasks.add_task(_handle_meta_facebook_comment_event, event)
+        queued += 1
+
+    return {
+        "status": "accepted",
+        "object": payload.get("object"),
+        "comment_events": len(events),
+        "queued": queued,
+        "skipped": skipped,
+    }
+
+
 @app.post("/webhooks/zapier/social-drafts")
 async def zapier_social_drafts(
     request: Request,
@@ -750,6 +797,87 @@ def _facebook_comment_id_from_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _facebook_comment_events_from_webhook(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("object") != "page":
+        return []
+
+    events: list[dict[str, Any]] = []
+    entries = payload.get("entry")
+    if not isinstance(entries, list):
+        return events
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        page_id = str(entry.get("id") or "")
+        changes = entry.get("changes")
+        if not isinstance(changes, list):
+            continue
+        for change in changes:
+            if not isinstance(change, dict) or change.get("field") != "feed":
+                continue
+            value = change.get("value")
+            if not isinstance(value, dict):
+                continue
+            if str(value.get("item") or "").lower() != "comment":
+                continue
+            if str(value.get("verb") or "").lower() not in {"add", "edited"}:
+                continue
+
+            comment_id = _facebook_comment_id_from_webhook_value(value)
+            message = _facebook_comment_message_from_webhook_value(value)
+            if not comment_id or not message:
+                continue
+
+            author = value.get("from")
+            author_id = ""
+            author_name = ""
+            if isinstance(author, dict):
+                author_id = str(author.get("id") or "")
+                author_name = str(author.get("name") or "")
+
+            post_id = str(value.get("post_id") or "")
+            parent_id = str(value.get("parent_id") or "")
+            event = {
+                "message": message,
+                "channel": "facebook",
+                "page_id": page_id,
+                "post_id": post_id,
+                "comment_id": comment_id,
+                "parent_id": parent_id,
+                "commenter_id": author_id,
+                "from_id": author_id,
+                "from_name": author_name,
+                "user_id": author_id,
+                "subscriber_id": author_id,
+                "first_name": author_name,
+                "custom_fields": {
+                    "facebook_page_id": page_id,
+                    "facebook_post_id": post_id,
+                    "facebook_comment_id": comment_id,
+                    "facebook_parent_id": parent_id,
+                },
+            }
+            events.append(event)
+    return events
+
+
+def _facebook_comment_id_from_webhook_value(value: dict[str, Any]) -> str:
+    for key in ("comment_id", "id"):
+        comment_id = value.get(key)
+        if isinstance(comment_id, (str, int)) and str(comment_id).strip():
+            return str(comment_id).strip()
+    return ""
+
+
+def _facebook_comment_message_from_webhook_value(value: dict[str, Any]) -> str:
+    for key in ("message", "text"):
+        message = value.get(key)
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return ""
+
+
 def _is_facebook_page_self_comment(payload: dict[str, Any]) -> bool:
     configured_page_id = str(settings.facebook_page_id or "").strip()
     configured_page_name = settings.facebook_page_name.strip().casefold()
@@ -769,6 +897,28 @@ def _is_facebook_page_self_comment(payload: dict[str, Any]) -> bool:
                 return True
 
     return False
+
+
+async def _handle_meta_facebook_comment_event(event: dict[str, Any]) -> None:
+    comment_id = _facebook_comment_id_from_payload(event)
+    message = extract_customer_message(event)
+    try:
+        if not comment_id or not message:
+            logger.warning("Meta Facebook webhook skipped invalid comment event: %s", event)
+            return
+        await _refresh_inventory_for_social_posts()
+        question = _customer_question_from_payload(event, message)
+        answer = await answer_customer_question(question)
+        _log_customer_inquiry("meta_facebook_webhook", question, answer)
+        facebook_reply = await _post_facebook_comment_reply(comment_id, answer.reply)
+        logger.info(
+            "Meta Facebook comment reply posted: comment_id=%s reply_id=%s endpoint=%s",
+            comment_id,
+            facebook_reply.get("id"),
+            facebook_reply.get("graph_endpoint"),
+        )
+    except Exception:
+        logger.exception("Meta Facebook comment reply failed: comment_id=%s", comment_id)
 
 
 async def _post_facebook_comment_reply(comment_id: str, reply: str) -> dict[str, Any]:
@@ -849,6 +999,18 @@ def _facebook_comment_id_candidates(comment_id: str) -> list[str]:
         if candidate and candidate not in unique_candidates:
             unique_candidates.append(candidate)
     return unique_candidates
+
+
+def _verify_facebook_webhook_signature(raw_body: bytes, signature_header: str | None) -> None:
+    app_secret = settings.facebook_app_secret
+    if not app_secret:
+        return
+    if not signature_header or not signature_header.startswith("sha256="):
+        raise HTTPException(status_code=401, detail="Missing Facebook webhook signature.")
+    expected_signature = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    received_signature = signature_header.split("=", maxsplit=1)[1]
+    if not secrets.compare_digest(received_signature, expected_signature):
+        raise HTTPException(status_code=401, detail="Invalid Facebook webhook signature.")
 
 
 def _facebook_error_detail(response: httpx.Response) -> str:
