@@ -592,6 +592,8 @@ async def zapier_facebook_comment_auto_reply(
             "comment_id": comment_id,
             "facebook_comment_reply_status": "posted",
             "facebook_comment_reply_id": facebook_reply.get("id"),
+            "facebook_comment_id_used": facebook_reply.get("comment_id_used"),
+            "facebook_comment_reply_endpoint": facebook_reply.get("graph_endpoint"),
             "facebook_graph_response": facebook_reply,
         }
     )
@@ -775,26 +777,78 @@ async def _post_facebook_comment_reply(comment_id: str, reply: str) -> dict[str,
         raise HTTPException(status_code=503, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured.")
 
     api_version = settings.facebook_graph_api_version.strip().strip("/")
-    url = f"https://graph.facebook.com/{api_version}/{comment_id}/comments"
     message = reply[:1900]
+    attempts: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=20) as client:
-        for attempt in range(3):
-            try:
-                response = await client.post(url, data={"message": message, "access_token": token})
-                response.raise_for_status()
-                payload = response.json()
-                return payload if isinstance(payload, dict) else {"response": payload}
-            except httpx.HTTPStatusError as exc:
-                status_code = exc.response.status_code
-                if status_code not in {408, 425, 429, 500, 502, 503, 504} or attempt == 2:
+        for candidate_id in _facebook_comment_id_candidates(comment_id):
+            url = f"https://graph.facebook.com/{api_version}/{candidate_id}/comments"
+            for attempt_number in range(3):
+                try:
+                    response = await client.post(
+                        url,
+                        json={"message": message},
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    result = payload if isinstance(payload, dict) else {"response": payload}
+                    result["comment_id_used"] = candidate_id
+                    result["graph_endpoint"] = url
+                    result["attempts"] = attempts
+                    return result
+                except httpx.HTTPStatusError as exc:
+                    status_code = exc.response.status_code
                     detail = _facebook_error_detail(exc.response)
-                    raise HTTPException(status_code=502, detail=f"Facebook comment reply failed: {detail}") from exc
-            except httpx.HTTPError as exc:
-                if attempt == 2:
-                    raise HTTPException(status_code=502, detail=f"Facebook comment reply failed: {exc}") from exc
-            await asyncio.sleep(0.5 * (2**attempt))
+                    attempts.append(
+                        {
+                            "comment_id": candidate_id,
+                            "graph_endpoint": url,
+                            "status_code": status_code,
+                            "error": detail,
+                        }
+                    )
+                    if status_code in {408, 425, 429, 500, 502, 503, 504} and attempt_number < 2:
+                        await asyncio.sleep(0.5 * (2**attempt_number))
+                        continue
+                    break
+                except httpx.HTTPError as exc:
+                    attempts.append(
+                        {
+                            "comment_id": candidate_id,
+                            "graph_endpoint": url,
+                            "status_code": None,
+                            "error": str(exc),
+                        }
+                    )
+                    if attempt_number < 2:
+                        await asyncio.sleep(0.5 * (2**attempt_number))
+                        continue
+                    break
 
-    raise HTTPException(status_code=502, detail="Facebook comment reply failed after retries.")
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "message": "Facebook comment reply failed.",
+            "attempts": attempts,
+            "required_permissions": ["pages_read_engagement", "pages_manage_engagement"],
+        },
+    )
+
+
+def _facebook_comment_id_candidates(comment_id: str) -> list[str]:
+    raw_id = str(comment_id).strip()
+    candidates = [raw_id]
+    parts = [part for part in raw_id.split("_") if part]
+    if len(parts) > 1:
+        candidates.append(parts[-1])
+    if len(parts) > 2:
+        candidates.append("_".join(parts[-2:]))
+
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
 
 
 def _facebook_error_detail(response: httpx.Response) -> str:

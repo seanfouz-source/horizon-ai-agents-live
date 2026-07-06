@@ -64,7 +64,7 @@ async def fake_answer_facebook_comment(question):
     assert question.channel == "facebook"
     assert question.user_id == "customer-123"
     assert question.first_name == "Customer"
-    assert question.metadata["comment_id"] == "comment_12345"
+    assert question.metadata["comment_id"]
     return CustomerAnswer(
         reply="Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789",
         redirect_to_ebay=False,
@@ -76,6 +76,7 @@ async def fake_answer_facebook_comment(question):
 
 class FakeFacebookAsyncClient:
     calls = []
+    status_by_url = {}
 
     def __init__(self, *args, **kwargs):
         pass
@@ -86,9 +87,16 @@ class FakeFacebookAsyncClient:
     async def __aexit__(self, exc_type, exc, traceback):
         return False
 
-    async def post(self, url, data):
-        self.calls.append((url, data))
+    async def post(self, url, json, headers):
+        self.calls.append((url, json, headers))
         request = httpx.Request("POST", url)
+        status_code = self.status_by_url.get(url, 200)
+        if status_code != 200:
+            return httpx.Response(
+                status_code,
+                json={"error": {"message": "Unsupported post request.", "code": 100}},
+                request=request,
+            )
         return httpx.Response(200, json={"id": "reply_12345"}, request=request)
 
 
@@ -133,6 +141,7 @@ def test_facebook_comment_auto_reply_posts_threaded_reply(monkeypatch):
     import app.main as main_module
 
     FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {}
     monkeypatch.setattr(main_module.settings, "webhook_shared_secret", None)
     monkeypatch.setattr(main_module.settings, "facebook_page_access_token", "page-token")
     monkeypatch.setattr(main_module.settings, "facebook_graph_api_version", "v20.0")
@@ -149,14 +158,45 @@ def test_facebook_comment_auto_reply_posts_threaded_reply(monkeypatch):
     assert body["status"] == "posted"
     assert body["reply"].startswith("Yes, we have iPhones available.")
     assert body["facebook_comment_reply_id"] == "reply_12345"
+    assert body["facebook_comment_id_used"] == "comment_12345"
+    assert body["facebook_comment_reply_endpoint"] == "https://graph.facebook.com/v20.0/comment_12345/comments"
     assert FakeFacebookAsyncClient.calls == [
         (
             "https://graph.facebook.com/v20.0/comment_12345/comments",
-            {
-                "message": "Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789",
-                "access_token": "page-token",
-            },
+            {"message": "Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789"},
+            {"Authorization": "Bearer page-token", "Content-Type": "application/json"},
         )
+    ]
+
+
+def test_facebook_comment_auto_reply_tries_composite_comment_id_suffix(monkeypatch):
+    import app.main as main_module
+
+    FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {
+        "https://graph.facebook.com/v20.0/122119072089347180_1337702541784590/comments": 400
+    }
+    monkeypatch.setattr(main_module.settings, "webhook_shared_secret", None)
+    monkeypatch.setattr(main_module.settings, "facebook_page_access_token", "page-token")
+    monkeypatch.setattr(main_module.settings, "facebook_graph_api_version", "v20.0")
+    monkeypatch.setattr(main_module.settings, "facebook_page_name", "Horizon Wireless")
+    monkeypatch.setattr(main_module, "_refresh_inventory_for_social_posts", fake_refresh_inventory)
+    monkeypatch.setattr(main_module, "answer_customer_question", fake_answer_facebook_comment)
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", FakeFacebookAsyncClient)
+
+    payload = facebook_comment_payload()
+    payload["comment_id"] = "122119072089347180_1337702541784590"
+
+    client = TestClient(main_module.app)
+    response = client.post("/webhooks/zapier/facebook-comment-auto-reply", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["facebook_comment_id_used"] == "1337702541784590"
+    assert body["facebook_comment_reply_endpoint"] == "https://graph.facebook.com/v20.0/1337702541784590/comments"
+    assert [call[0] for call in FakeFacebookAsyncClient.calls] == [
+        "https://graph.facebook.com/v20.0/122119072089347180_1337702541784590/comments",
+        "https://graph.facebook.com/v20.0/1337702541784590/comments",
     ]
 
 
@@ -164,6 +204,7 @@ def test_facebook_comment_auto_reply_skips_page_self_comment(monkeypatch):
     import app.main as main_module
 
     FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {}
     monkeypatch.setattr(main_module.settings, "webhook_shared_secret", None)
     monkeypatch.setattr(main_module.settings, "facebook_page_name", "Horizon Wireless")
 
