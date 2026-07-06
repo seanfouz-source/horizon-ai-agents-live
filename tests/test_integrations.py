@@ -117,6 +117,18 @@ def test_zapier_social_drafts_response_adds_flat_metricool_fields():
     assert response["metricool_facebook_link_url_items"][0] == "https://www.ebay.com/itm/1"
 
 
+def test_zapier_social_drafts_response_adds_zero_payload_count_without_posts():
+    response = zapier_social_drafts_response(
+        SocialDraftBatch(
+            campaign_name="ExactSpec test",
+            posts=[],
+            metricool_payloads=[],
+        )
+    )
+
+    assert response["metricool_payload_count"] == 0
+
+
 def test_zapier_social_drafts_response_adds_platform_specific_post_aliases():
     batch = SocialDraftBatch(
         campaign_name="ExactSpec test",

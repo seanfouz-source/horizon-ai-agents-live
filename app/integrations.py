@@ -140,6 +140,7 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
     response = batch.model_dump()
     first_payload = batch.metricool_payloads[0] if batch.metricool_payloads else {}
     if not first_payload:
+        response.update(_metricool_line_items(batch.metricool_payloads))
         return response
 
     platform_flags = {
