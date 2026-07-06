@@ -87,12 +87,47 @@ def meta_page_comment_payload():
     }
 
 
+def meta_page_messenger_payload():
+    return {
+        "object": "page",
+        "entry": [
+            {
+                "id": "1176323222221637",
+                "time": 1783350000,
+                "messaging": [
+                    {
+                        "sender": {"id": "customer-123"},
+                        "recipient": {"id": "1176323222221637"},
+                        "timestamp": 1783350000,
+                        "message": {"mid": "mid_12345", "text": "Do you have any iPhones?"},
+                    }
+                ],
+            }
+        ],
+    }
+
+
 async def fake_answer_facebook_comment(question):
     assert question.message == "Do you have any iPhones?"
     assert question.channel == "facebook"
     assert question.user_id == "customer-123"
     assert question.first_name == "Customer"
     assert question.metadata["comment_id"]
+    return CustomerAnswer(
+        reply="Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789",
+        redirect_to_ebay=False,
+        conversation_allowed=True,
+        ebay_listing_url="https://www.ebay.com/itm/123456789",
+        ebay_item_id="123456789",
+    )
+
+
+async def fake_answer_messenger_question(question):
+    assert question.message == "Do you have any iPhones?"
+    assert question.channel == "messenger"
+    assert question.user_id == "customer-123"
+    assert question.metadata["messenger_mid"] == "mid_12345"
+    assert question.metadata["conversation_id"] == "mid_12345"
     return CustomerAnswer(
         reply="Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789",
         redirect_to_ebay=False,
@@ -322,16 +357,76 @@ def test_meta_facebook_webhook_queues_comment_reply(monkeypatch):
         "status": "accepted",
         "object": "page",
         "comment_events": 1,
+        "messenger_events": 0,
         "queued": 1,
         "skipped": 0,
     }
     assert FakeFacebookAsyncClient.calls == [
         (
-            "https://graph.facebook.com/v20.0/comment_12345/comments",
+            "https://graph.facebook.com/v25.0/comment_12345/comments",
             {"message": "Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789"},
             {"Authorization": "Bearer page-token", "Content-Type": "application/json"},
         )
     ]
+
+
+def test_meta_facebook_webhook_queues_messenger_reply(monkeypatch):
+    import app.main as main_module
+
+    FakeFacebookAsyncClient.calls = []
+    FakeFacebookAsyncClient.status_by_url = {}
+    monkeypatch.setattr(main_module.settings, "facebook_page_access_token", "page-token")
+    monkeypatch.setattr(main_module.settings, "facebook_page_id", "1176323222221637")
+    monkeypatch.setattr(main_module.settings, "facebook_app_secret", None)
+    monkeypatch.setattr(main_module, "_refresh_inventory_for_social_posts", fake_refresh_inventory)
+    monkeypatch.setattr(main_module, "answer_customer_question", fake_answer_messenger_question)
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", FakeFacebookAsyncClient)
+
+    client = TestClient(main_module.app)
+    response = client.post("/webhooks/meta/facebook", json=meta_page_messenger_payload())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "accepted",
+        "object": "page",
+        "comment_events": 0,
+        "messenger_events": 1,
+        "queued": 1,
+        "skipped": 0,
+    }
+    assert FakeFacebookAsyncClient.calls == [
+        (
+            "https://graph.facebook.com/v25.0/me/messages",
+            {
+                "recipient": {"id": "customer-123"},
+                "messaging_type": "RESPONSE",
+                "message": {
+                    "text": "Yes, we have iPhones available. Buy direct on eBay: https://www.ebay.com/itm/123456789"
+                },
+            },
+            {"Authorization": "Bearer page-token", "Content-Type": "application/json"},
+        )
+    ]
+
+
+def test_meta_facebook_webhook_skips_page_self_messenger_message(monkeypatch):
+    import app.main as main_module
+
+    FakeFacebookAsyncClient.calls = []
+    monkeypatch.setattr(main_module.settings, "facebook_page_id", "1176323222221637")
+    monkeypatch.setattr(main_module.settings, "facebook_app_secret", None)
+
+    payload = meta_page_messenger_payload()
+    payload["entry"][0]["messaging"][0]["sender"]["id"] = "1176323222221637"
+
+    client = TestClient(main_module.app)
+    response = client.post("/webhooks/meta/facebook", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["messenger_events"] == 1
+    assert response.json()["queued"] == 0
+    assert response.json()["skipped"] == 1
+    assert FakeFacebookAsyncClient.calls == []
 
 
 def test_meta_facebook_webhook_skips_page_self_comment(monkeypatch):

@@ -18,7 +18,7 @@ def normalize_channel(value: object) -> str:
     channel = str(value or "unknown").strip().lower()
     aliases = {
         "fb": "facebook",
-        "messenger": "facebook",
+        "facebook messenger": "messenger",
         "ig": "instagram",
         "insta": "instagram",
         "tik tok": "tiktok",
@@ -26,7 +26,9 @@ def normalize_channel(value: object) -> str:
     }
     return aliases.get(
         channel,
-        channel if channel in {"facebook", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web"} else "unknown",
+        channel
+        if channel in {"facebook", "messenger", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web"}
+        else "unknown",
     )
 
 

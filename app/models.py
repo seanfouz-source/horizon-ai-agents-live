@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
-Channel = Literal["facebook", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web", "unknown"]
+Channel = Literal["facebook", "messenger", "instagram", "tiktok", "linkedin", "whatsapp", "telegram", "web", "unknown"]
 SocialPlatform = Literal["facebook", "instagram", "tiktok", "linkedin"]
 GroupInteractionType = Literal["group_comment", "group_post_comment", "group_dm_to_page", "page_dm", "instagram_dm", "manual"]
 

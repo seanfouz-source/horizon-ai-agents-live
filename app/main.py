@@ -627,21 +627,30 @@ async def meta_facebook_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Facebook webhook payload must be a JSON object.")
 
-    events = _facebook_comment_events_from_webhook(payload)
+    comment_events = _facebook_comment_events_from_webhook(payload)
+    messenger_events = _facebook_messenger_events_from_webhook(payload)
     queued = 0
     skipped = 0
-    for event in events:
+    for event in comment_events:
         if _is_facebook_page_self_comment(event):
             skipped += 1
             logger.info("Meta Facebook webhook skipped page self-comment: comment_id=%s", event.get("comment_id"))
             continue
         background_tasks.add_task(_handle_meta_facebook_comment_event, event)
         queued += 1
+    for event in messenger_events:
+        if _is_facebook_page_self_message(event):
+            skipped += 1
+            logger.info("Meta Facebook webhook skipped page self-message: sender_id=%s", event.get("sender_id"))
+            continue
+        background_tasks.add_task(_handle_meta_facebook_messenger_event, event)
+        queued += 1
 
     return {
         "status": "accepted",
         "object": payload.get("object"),
-        "comment_events": len(events),
+        "comment_events": len(comment_events),
+        "messenger_events": len(messenger_events),
         "queued": queued,
         "skipped": skipped,
     }
@@ -878,6 +887,90 @@ def _facebook_comment_message_from_webhook_value(value: dict[str, Any]) -> str:
     return ""
 
 
+def _facebook_messenger_events_from_webhook(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("object") != "page":
+        return []
+
+    events: list[dict[str, Any]] = []
+    entries = payload.get("entry")
+    if not isinstance(entries, list):
+        return events
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        page_id = str(entry.get("id") or "")
+        messaging_events = entry.get("messaging")
+        if not isinstance(messaging_events, list):
+            continue
+
+        for messaging_event in messaging_events:
+            if not isinstance(messaging_event, dict):
+                continue
+            message_data = messaging_event.get("message")
+            postback_data = messaging_event.get("postback")
+            if isinstance(message_data, dict) and message_data.get("is_echo"):
+                continue
+            if not isinstance(message_data, dict) and not isinstance(postback_data, dict):
+                continue
+
+            message = _facebook_messenger_message_text(messaging_event)
+            if not message:
+                continue
+
+            sender_id = _facebook_messenger_party_id(messaging_event.get("sender"))
+            recipient_id = _facebook_messenger_party_id(messaging_event.get("recipient")) or page_id
+            if not sender_id:
+                continue
+
+            mid = ""
+            if isinstance(message_data, dict):
+                mid = str(message_data.get("mid") or "")
+            event = {
+                "message": message,
+                "channel": "messenger",
+                "page_id": page_id or recipient_id,
+                "recipient_id": recipient_id,
+                "sender_id": sender_id,
+                "user_id": sender_id,
+                "subscriber_id": sender_id,
+                "conversation_id": mid or sender_id,
+                "messenger_mid": mid,
+                "custom_fields": {
+                    "facebook_page_id": page_id or recipient_id,
+                    "messenger_sender_id": sender_id,
+                    "messenger_recipient_id": recipient_id,
+                    "messenger_mid": mid,
+                },
+            }
+            events.append(event)
+    return events
+
+
+def _facebook_messenger_message_text(messaging_event: dict[str, Any]) -> str:
+    message_data = messaging_event.get("message")
+    if isinstance(message_data, dict):
+        text = message_data.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+    postback_data = messaging_event.get("postback")
+    if isinstance(postback_data, dict):
+        for key in ("title", "payload"):
+            text = postback_data.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return ""
+
+
+def _facebook_messenger_party_id(value: Any) -> str:
+    if isinstance(value, dict):
+        party_id = value.get("id")
+        if isinstance(party_id, (str, int)) and str(party_id).strip():
+            return str(party_id).strip()
+    return ""
+
+
 def _is_facebook_page_self_comment(payload: dict[str, Any]) -> bool:
     configured_page_id = str(settings.facebook_page_id or "").strip()
     configured_page_name = settings.facebook_page_name.strip().casefold()
@@ -896,6 +989,17 @@ def _is_facebook_page_self_comment(payload: dict[str, Any]) -> bool:
             if isinstance(value, str) and value.strip().casefold() == configured_page_name:
                 return True
 
+    return False
+
+
+def _is_facebook_page_self_message(payload: dict[str, Any]) -> bool:
+    configured_page_id = str(settings.facebook_page_id or "").strip()
+    page_id = str(payload.get("page_id") or payload.get("recipient_id") or "").strip()
+    sender_id = str(payload.get("sender_id") or payload.get("user_id") or payload.get("subscriber_id") or "").strip()
+    if configured_page_id and sender_id == configured_page_id:
+        return True
+    if page_id and sender_id == page_id:
+        return True
     return False
 
 
@@ -919,6 +1023,28 @@ async def _handle_meta_facebook_comment_event(event: dict[str, Any]) -> None:
         )
     except Exception:
         logger.exception("Meta Facebook comment reply failed: comment_id=%s", comment_id)
+
+
+async def _handle_meta_facebook_messenger_event(event: dict[str, Any]) -> None:
+    sender_id = str(event.get("sender_id") or event.get("user_id") or event.get("subscriber_id") or "").strip()
+    message = extract_customer_message(event)
+    try:
+        if not sender_id or not message:
+            logger.warning("Meta Facebook webhook skipped invalid Messenger event: %s", event)
+            return
+        await _refresh_inventory_for_social_posts()
+        question = _customer_question_from_payload(event, message)
+        answer = await answer_customer_question(question)
+        _log_customer_inquiry("meta_facebook_messenger", question, answer)
+        messenger_reply = await _send_facebook_messenger_reply(sender_id, answer.reply)
+        logger.info(
+            "Meta Facebook Messenger reply sent: sender_id=%s message_id=%s endpoint=%s",
+            sender_id,
+            messenger_reply.get("message_id") or messenger_reply.get("id"),
+            messenger_reply.get("graph_endpoint"),
+        )
+    except Exception:
+        logger.exception("Meta Facebook Messenger reply failed: sender_id=%s", sender_id)
 
 
 async def _post_facebook_comment_reply(comment_id: str, reply: str) -> dict[str, Any]:
@@ -981,6 +1107,60 @@ async def _post_facebook_comment_reply(comment_id: str, reply: str) -> dict[str,
             "message": "Facebook comment reply failed.",
             "attempts": attempts,
             "required_permissions": ["pages_read_engagement", "pages_manage_engagement"],
+        },
+    )
+
+
+async def _send_facebook_messenger_reply(recipient_id: str, reply: str) -> dict[str, Any]:
+    token = settings.facebook_page_access_token
+    if not token:
+        raise HTTPException(status_code=503, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured.")
+
+    api_version = settings.facebook_graph_api_version.strip().strip("/")
+    url = f"https://graph.facebook.com/{api_version}/me/messages"
+    message = reply[:1900]
+    attempts: list[dict[str, Any]] = []
+    body = {
+        "recipient": {"id": recipient_id},
+        "messaging_type": "RESPONSE",
+        "message": {"text": message},
+    }
+    async with httpx.AsyncClient(timeout=20) as client:
+        for attempt_number in range(3):
+            try:
+                response = await client.post(
+                    url,
+                    json=body,
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                result = payload if isinstance(payload, dict) else {"response": payload}
+                result["recipient_id"] = recipient_id
+                result["graph_endpoint"] = url
+                result["attempts"] = attempts
+                return result
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                detail = _facebook_error_detail(exc.response)
+                attempts.append({"graph_endpoint": url, "status_code": status_code, "error": detail})
+                if status_code in {408, 425, 429, 500, 502, 503, 504} and attempt_number < 2:
+                    await asyncio.sleep(0.5 * (2**attempt_number))
+                    continue
+                break
+            except httpx.HTTPError as exc:
+                attempts.append({"graph_endpoint": url, "status_code": None, "error": str(exc)})
+                if attempt_number < 2:
+                    await asyncio.sleep(0.5 * (2**attempt_number))
+                    continue
+                break
+
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "message": "Facebook Messenger reply failed.",
+            "attempts": attempts,
+            "required_permissions": ["pages_messaging"],
         },
     )
 
