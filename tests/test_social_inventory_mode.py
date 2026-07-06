@@ -34,6 +34,36 @@ class FakeRepository:
         return next((item for item in self.items if item.sku == sku), None)
 
 
+def inventory_half_hour_slots(count, start_at=None):
+    base = datetime.fromisoformat(start_at or "2026-07-02 09:00:00")
+    return [
+        (base + timedelta(minutes=30 * index)).strftime("%Y-%m-%d %H:%M:%S")
+        for index in range(count)
+    ]
+
+
+def test_inventory_publication_times_schedule_two_per_hour_until_items_run_out():
+    central = ZoneInfo("America/Chicago")
+
+    publication_times = agents_module._inventory_metricool_publication_times(
+        19,
+        now=datetime(2026, 7, 2, 8, 0, tzinfo=central),
+    )
+
+    assert len(publication_times) == 19
+    assert publication_times[:4] == [
+        "2026-07-02 09:00:00",
+        "2026-07-02 09:30:00",
+        "2026-07-02 10:00:00",
+        "2026-07-02 10:30:00",
+    ]
+    assert publication_times[-1] == "2026-07-02 18:00:00"
+    counts_by_hour = {}
+    for publication_time in publication_times:
+        counts_by_hour[publication_time[:13]] = counts_by_hour.get(publication_time[:13], 0) + 1
+    assert max(counts_by_hour.values()) == 2
+
+
 def test_all_inventory_mode_creates_one_payload_per_item_cross_posted(monkeypatch):
     items = [
         InventoryItem(
@@ -502,17 +532,8 @@ def test_all_inventory_mode_records_history_and_cycles_after_full_rotation(tmp_p
     monkeypatch.setattr(agents_module, "get_repository", lambda: repository)
     monkeypatch.setattr(
         agents_module,
-        "default_metricool_publication_times",
-        lambda count, start_at=None: [
-            "2026-07-02 09:00:00",
-            "2026-07-02 18:00:00",
-            "2026-07-03 09:00:00",
-            "2026-07-03 18:00:00",
-            "2026-07-04 09:00:00",
-            "2026-07-04 18:00:00",
-            "2026-07-05 09:00:00",
-            "2026-07-05 18:00:00",
-        ][:count],
+        "_inventory_metricool_publication_times",
+        inventory_half_hour_slots,
     )
 
     request = SocialDraftRequest(
@@ -528,19 +549,20 @@ def test_all_inventory_mode_records_history_and_cycles_after_full_rotation(tmp_p
 
     assert [payload["publication_date_time"] for payload in first_batch.metricool_payloads] == [
         "2026-07-02 09:00:00",
-        "2026-07-02 18:00:00",
-        "2026-07-03 09:00:00",
+        "2026-07-02 09:30:00",
+        "2026-07-02 10:00:00",
     ]
-    assert repository.social_post_count_for_day("2026-07-02") == 2
-    assert repository.social_post_count_for_day("2026-07-03") == 1
+    assert repository.social_post_count_for_day("2026-07-02") == 3
+    assert repository.social_post_count_for_hour("2026-07-02 09") == 2
+    assert repository.social_post_count_for_hour("2026-07-02 10") == 1
 
     second_batch = asyncio.run(agents_module.create_social_drafts(request))
 
     assert [post.product_sku for post in second_batch.posts] == ["EBAY-3", "EBAY-2", "EBAY-1"]
     assert [payload["publication_date_time"] for payload in second_batch.metricool_payloads] == [
-        "2026-07-03 09:00:00",
-        "2026-07-04 09:00:00",
-        "2026-07-04 18:00:00",
+        "2026-07-02 10:30:00",
+        "2026-07-02 11:00:00",
+        "2026-07-02 11:30:00",
     ]
 
 
@@ -603,7 +625,7 @@ def test_all_inventory_mode_rotates_through_full_store_inventory(tmp_path, monke
     assert [payload["linkedin"] for payload in batch.metricool_payloads] == [True, True]
 
 
-def test_all_inventory_mode_respects_existing_daily_history(tmp_path, monkeypatch):
+def test_all_inventory_mode_respects_existing_hourly_history(tmp_path, monkeypatch):
     repository = InventoryRepository(tmp_path / "inventory.db")
     repository.record_social_post(
         ebay_item_id="old-1",
@@ -622,7 +644,7 @@ def test_all_inventory_mode_respects_existing_daily_history(tmp_path, monkeypatc
         item_url="https://www.ebay.com/itm/old2",
         image_url="https://example.com/old2.jpg",
         caption="Existing post",
-        scheduled_at="2026-07-02 18:00:00",
+        scheduled_at="2026-07-02 09:30:00",
         platform="facebook,instagram",
     )
     repository.upsert_items(
@@ -641,13 +663,8 @@ def test_all_inventory_mode_respects_existing_daily_history(tmp_path, monkeypatc
     monkeypatch.setattr(agents_module, "get_repository", lambda: repository)
     monkeypatch.setattr(
         agents_module,
-        "default_metricool_publication_times",
-        lambda count, start_at=None: [
-            "2026-07-02 09:00:00",
-            "2026-07-02 18:00:00",
-            "2026-07-03 09:00:00",
-            "2026-07-03 18:00:00",
-        ][:count],
+        "_inventory_metricool_publication_times",
+        inventory_half_hour_slots,
     )
 
     batch = asyncio.run(
@@ -661,4 +678,4 @@ def test_all_inventory_mode_respects_existing_daily_history(tmp_path, monkeypatc
         )
     )
 
-    assert [payload["publication_date_time"] for payload in batch.metricool_payloads] == ["2026-07-03 09:00:00"]
+    assert [payload["publication_date_time"] for payload in batch.metricool_payloads] == ["2026-07-02 10:00:00"]

@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import cast
 
 from agents import Agent, Runner, function_tool
@@ -10,6 +10,8 @@ from app.campaigns import request_campaign_media_url
 from app.config import get_settings
 from app.integrations import (
     METRICOOL_PUBLICATION_FORMAT,
+    POSTING_MINIMUM_LEAD_TIME,
+    POSTING_TIMEZONE,
     apply_tiktok_daily_post_cap,
     default_metricool_publication_times,
     metricool_payload,
@@ -38,6 +40,9 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 INVENTORY_ROTATION_CANDIDATE_LIMIT = 200
+INVENTORY_POSTS_PER_HOUR = 2
+INVENTORY_POSTING_INTERVAL = timedelta(minutes=30)
+INVENTORY_DEFAULT_START_TIME = time(9, 0)
 
 
 def get_repository() -> InventoryRepository:
@@ -648,7 +653,7 @@ async def _create_all_inventory_social_drafts(request: SocialDraftRequest) -> So
         notes=(
             f"Generated {len(posts)} scheduled Summer Sale post payloads from {len(items)} in-stock inventory items. "
             "Use the metricool_*_items fields or loop over metricool_payloads in Zapier to schedule every item "
-            "at the two-posts-per-day Metricool cadence."
+            "at the two-listings-per-hour Metricool cadence until the active inventory runs out."
         ),
     )
     batch.metricool_payloads = [metricool_payload(post, request) for post in batch.posts]
@@ -693,35 +698,99 @@ def _available_metricool_publication_times(
     if count <= 0:
         return []
 
-    daily_limit = _metricool_daily_post_limit()
+    hourly_limit = _metricool_hourly_post_limit()
     publication_times: list[str] = []
-    daily_counts: dict[str, int] = {}
+    hourly_counts: dict[str, int] = {}
     probe_start = start_at
 
     for _ in range(370):
-        candidates = default_metricool_publication_times(max(count * 3, 8), start_at=probe_start)
+        candidates = _inventory_metricool_publication_times(max(count * 3, count + 20), start_at=probe_start)
         if not candidates:
             break
 
         for candidate in candidates:
-            scheduled_day = candidate[:10]
-            if scheduled_day not in daily_counts:
-                daily_counts[scheduled_day] = max(
-                    repository.social_post_count_for_day(scheduled_day),
-                    external_daily_counts.get(scheduled_day, 0),
-                )
-            if daily_counts[scheduled_day] >= daily_limit:
+            scheduled_hour = candidate[:13]
+            if scheduled_hour not in hourly_counts:
+                hourly_counts[scheduled_hour] = repository.social_post_count_for_hour(scheduled_hour)
+            if hourly_counts[scheduled_hour] >= hourly_limit:
+                continue
+            if repository.social_post_count_for_slot(candidate) > 0:
                 continue
             publication_times.append(candidate)
-            daily_counts[scheduled_day] += 1
+            hourly_counts[scheduled_hour] += 1
             if len(publication_times) == count:
                 return publication_times
 
         last_candidate = datetime.strptime(candidates[-1], METRICOOL_PUBLICATION_FORMAT)
-        next_day = (last_candidate + timedelta(days=1)).date().isoformat()
-        probe_start = f"{next_day} 00:00:00"
+        next_slot = last_candidate + INVENTORY_POSTING_INTERVAL
+        probe_start = next_slot.strftime(METRICOOL_PUBLICATION_FORMAT)
 
     return publication_times
+
+
+def _inventory_metricool_publication_times(
+    count: int,
+    start_at: str | datetime | None = None,
+    now: datetime | None = None,
+) -> list[str]:
+    if count <= 0:
+        return []
+
+    current_time = now or datetime.now(POSTING_TIMEZONE)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=POSTING_TIMEZONE)
+
+    minimum_time = current_time.astimezone(POSTING_TIMEZONE) + POSTING_MINIMUM_LEAD_TIME
+    schedule_start = _coerce_inventory_schedule_start(start_at)
+    if schedule_start and schedule_start > minimum_time:
+        minimum_time = schedule_start
+
+    posting_start = _inventory_daily_start_time()
+    day_start = datetime.combine(minimum_time.date(), posting_start, tzinfo=POSTING_TIMEZONE)
+    if minimum_time < day_start:
+        minimum_time = day_start
+
+    first_slot = _ceil_to_inventory_posting_slot(minimum_time)
+    return [
+        (first_slot + (INVENTORY_POSTING_INTERVAL * index)).strftime(METRICOOL_PUBLICATION_FORMAT)
+        for index in range(count)
+    ]
+
+
+def _coerce_inventory_schedule_start(value: str | datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        candidate = value
+        if candidate.tzinfo is None:
+            candidate = candidate.replace(tzinfo=POSTING_TIMEZONE)
+        return candidate.astimezone(POSTING_TIMEZONE)
+    try:
+        return datetime.strptime(value.strip(), METRICOOL_PUBLICATION_FORMAT).replace(tzinfo=POSTING_TIMEZONE)
+    except (AttributeError, ValueError):
+        return None
+
+
+def _ceil_to_inventory_posting_slot(candidate: datetime) -> datetime:
+    rounded = candidate.astimezone(POSTING_TIMEZONE).replace(second=0, microsecond=0)
+    if rounded.minute in {0, 30}:
+        return rounded
+    if rounded.minute < 30:
+        return rounded.replace(minute=30)
+    return rounded.replace(minute=0) + timedelta(hours=1)
+
+
+def _inventory_daily_start_time() -> time:
+    settings = get_settings()
+    try:
+        hour, minute = settings.metricool_morning_post_time.strip().split(":", maxsplit=1)
+        return time(int(hour), int(minute))
+    except (AttributeError, TypeError, ValueError):
+        return INVENTORY_DEFAULT_START_TIME
+
+
+def _metricool_hourly_post_limit() -> int:
+    return INVENTORY_POSTS_PER_HOUR
 
 
 async def _metricool_existing_counts(
@@ -781,6 +850,8 @@ def _repository_supports_post_history(repository: object) -> bool:
         callable(getattr(repository, method, None))
         for method in (
             "social_post_count_for_day",
+            "social_post_count_for_hour",
+            "social_post_count_for_slot",
             "recently_promoted_ebay_item_ids",
             "last_social_post_at_by_ebay_item_id",
             "record_social_post",

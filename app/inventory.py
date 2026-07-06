@@ -284,6 +284,33 @@ class InventoryRepository:
             ).fetchone()
         return int(row["total"])
 
+    def social_post_count_for_hour(self, scheduled_hour: str) -> int:
+        hour = str(scheduled_hour)[:13]
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM social_post_history
+                WHERE substr(scheduled_at, 1, 13) = ?
+                AND status NOT IN ('failed', 'cancelled', 'skipped')
+                """,
+                (hour,),
+            ).fetchone()
+        return int(row["total"])
+
+    def social_post_count_for_slot(self, scheduled_at: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM social_post_history
+                WHERE scheduled_at = ?
+                AND status NOT IN ('failed', 'cancelled', 'skipped')
+                """,
+                (scheduled_at,),
+            ).fetchone()
+        return int(row["total"])
+
     def recently_promoted_ebay_item_ids(
         self,
         cooldown_days: int = 14,

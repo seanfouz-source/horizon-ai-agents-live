@@ -62,7 +62,7 @@ class SocialDraftRequest(BaseModel):
     platforms: list[SocialPlatform] = Field(default_factory=lambda: ["facebook", "instagram", "tiktok", "linkedin"])
     posts_per_platform: int = Field(default=1, ge=1, le=5)
     promote_all_inventory: bool = False
-    max_products_per_run: int = Field(default=50, ge=1, le=50)
+    max_products_per_run: int = Field(default=200, ge=1, le=200)
     cross_post_to_all_platforms: bool = True
     brand_name: str | None = None
     sale_name: str = "Horizon Wireless Summer Sale"
