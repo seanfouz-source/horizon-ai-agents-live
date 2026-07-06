@@ -21,7 +21,7 @@ class EbayClient:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._access_token = (settings.ebay_access_token or "").strip() or None
+        self._access_token = self._clean_access_token(settings.ebay_access_token)
         if not self._access_token and not self._has_refresh_credentials() and not self._has_client_credentials():
             raise RuntimeError(
                 "EBAY_ACCESS_TOKEN, eBay OAuth refresh credentials, or EBAY_CLIENT_ID/EBAY_CLIENT_SECRET "
@@ -92,7 +92,7 @@ class EbayClient:
             query = " "
 
         async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
-            await self._ensure_access_token(client)
+            await self._ensure_access_token(client, prefer_application=True)
             while len(items) < limit:
                 response = await self._get(
                     client,
@@ -172,8 +172,15 @@ class EbayClient:
             for field in ("ebay_client_id", "ebay_client_secret")
         )
 
-    async def _ensure_access_token(self, client: httpx.AsyncClient) -> None:
-        if self._has_refresh_credentials():
+    async def _ensure_access_token(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        prefer_application: bool = False,
+    ) -> None:
+        if prefer_application and self._has_client_credentials():
+            refreshed_token = await self._client_credentials_access_token(client)
+        elif self._has_refresh_credentials():
             refreshed_token = await self._refresh_access_token(client)
         elif self._has_client_credentials():
             refreshed_token = await self._client_credentials_access_token(client)
@@ -563,8 +570,53 @@ class EbayClient:
                 )
                 await asyncio.sleep(delay)
                 continue
+            if response.status_code == 401 and await self._recover_access_token(client, path):
+                headers = self._with_current_bearer_token(headers)
+                logger.warning(
+                    "eBay %s %s returned 401 Unauthorized; minted a fresh OAuth token and retrying once.",
+                    method,
+                    path,
+                )
+                if method == "POST":
+                    response = await client.post(path, data=data, headers=headers)
+                else:
+                    response = await client.get(path, params=params, headers=headers)
             return response
 
         if last_exc:
             raise last_exc
         raise RuntimeError(f"eBay {method} {path} failed before returning a response.")
+
+    async def _recover_access_token(self, client: httpx.AsyncClient, path: str) -> bool:
+        if path == "/identity/v1/oauth2/token":
+            return False
+        try:
+            if path.startswith("/buy/browse/") and self._has_client_credentials():
+                token = await self._client_credentials_access_token(client)
+            elif self._has_refresh_credentials():
+                token = await self._refresh_access_token(client)
+            elif self._has_client_credentials():
+                token = await self._client_credentials_access_token(client)
+            else:
+                return False
+        except httpx.HTTPError as exc:
+            logger.warning("Could not recover eBay OAuth token after 401: %s", exc)
+            return False
+        if not token:
+            return False
+        self._access_token = token
+        return True
+
+    def _with_current_bearer_token(self, headers: dict[str, str] | None) -> dict[str, str] | None:
+        if headers is None:
+            return None
+        updated = dict(headers)
+        updated["Authorization"] = f"Bearer {self._access_token}"
+        return updated
+
+    @staticmethod
+    def _clean_access_token(value: object) -> str | None:
+        token = str(value or "").strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        return token or None
