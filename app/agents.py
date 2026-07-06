@@ -37,6 +37,7 @@ from app.models import (
 
 
 logger = logging.getLogger(__name__)
+INVENTORY_ROTATION_CANDIDATE_LIMIT = 200
 
 
 def get_repository() -> InventoryRepository:
@@ -822,7 +823,7 @@ def _tiktok_cap_note(suppressed_count: int, daily_cap: int) -> str:
 
 
 def _inventory_items_for_daily_promotion(repository: InventoryRepository, request: SocialDraftRequest) -> list[InventoryItem]:
-    candidate_limit = max(request.max_products_per_run * 4, request.max_products_per_run + 10)
+    candidate_limit = INVENTORY_ROTATION_CANDIDATE_LIMIT
     if request.sku:
         item = repository.get(request.sku)
         candidates = [item] if item and _is_active_promotable_item(item) and _is_ebay_listing(item) else []

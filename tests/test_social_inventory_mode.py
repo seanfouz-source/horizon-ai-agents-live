@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -542,6 +542,65 @@ def test_all_inventory_mode_records_history_and_cycles_after_full_rotation(tmp_p
         "2026-07-04 09:00:00",
         "2026-07-04 18:00:00",
     ]
+
+
+def test_all_inventory_mode_rotates_through_full_store_inventory(tmp_path, monkeypatch):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    base_updated_at = datetime.fromisoformat("2026-07-01T12:00:00+00:00")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku=f"EBAY-{index:02d}",
+                ebay_item_id=str(index),
+                title=f"Store Listing {index:02d}",
+                quantity=1,
+                ebay_url=f"https://www.ebay.com/itm/{index}",
+                image_url=f"https://i.ebayimg.com/images/g/{index}/s-l1600.jpg",
+                listing_status="ACTIVE",
+                source="ebay-browse-api",
+                updated_at=base_updated_at - timedelta(minutes=index),
+            )
+            for index in range(1, 19)
+        ]
+    )
+    for index in range(1, 13):
+        repository.record_social_post(
+            ebay_item_id=str(index),
+            sku=f"EBAY-{index:02d}",
+            title=f"Store Listing {index:02d}",
+            item_url=f"https://www.ebay.com/itm/{index}",
+            image_url=f"https://i.ebayimg.com/images/g/{index}/s-l1600.jpg",
+            caption="Queued earlier",
+            scheduled_at=f"2026-07-{index:02d} 09:00:00",
+            platform="facebook,instagram,tiktok,linkedin",
+        )
+
+    monkeypatch.setattr(agents_module, "get_repository", lambda: repository)
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: [
+            "2026-07-20 09:00:00",
+            "2026-07-20 18:00:00",
+        ][:count],
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(
+                promote_all_inventory=True,
+                max_products_per_run=2,
+                brand_name="Horizon Wireless",
+                platforms=["facebook", "instagram", "tiktok", "linkedin"],
+            )
+        )
+    )
+
+    assert [post.product_sku for post in batch.posts] == ["EBAY-13", "EBAY-14"]
+    assert [payload["facebook"] for payload in batch.metricool_payloads] == [True, True]
+    assert [payload["instagram"] for payload in batch.metricool_payloads] == [True, True]
+    assert [payload["tiktok"] for payload in batch.metricool_payloads] == [True, True]
+    assert [payload["linkedin"] for payload in batch.metricool_payloads] == [True, True]
 
 
 def test_all_inventory_mode_respects_existing_daily_history(tmp_path, monkeypatch):

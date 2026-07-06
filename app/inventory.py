@@ -266,7 +266,7 @@ class InventoryRepository:
                 ORDER BY updated_at DESC, quantity DESC
                 LIMIT ?
                 """,
-                (max(1, min(limit, 50)),),
+                (max(1, min(limit, 200)),),
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
