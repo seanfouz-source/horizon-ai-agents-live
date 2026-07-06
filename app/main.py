@@ -529,15 +529,10 @@ async def manychat_webhook(
     message = extract_customer_message(payload)
     if not message:
         raise HTTPException(status_code=400, detail="No customer message found in payload.")
-    question = CustomerQuestion(
-        message=message,
-        channel=normalize_channel(payload.get("channel") or payload.get("platform")),
-        user_id=str(payload.get("subscriber_id") or payload.get("user_id") or ""),
-        first_name=str(payload.get("first_name") or ""),
-        metadata={key: str(value) for key, value in payload.items() if isinstance(value, (str, int, float, bool))},
-    )
+    await _refresh_inventory_for_social_posts()
+    question = _customer_question_from_payload(payload, message)
     answer = await answer_customer_question(question)
-    _log_customer_inquiry("manychat", message, answer)
+    _log_customer_inquiry("manychat", question, answer)
     return manychat_dynamic_response(answer)
 
 
@@ -551,16 +546,10 @@ async def zapier_customer_question(
     message = extract_customer_message(payload)
     if not message:
         raise HTTPException(status_code=400, detail="No customer message found in payload.")
-    answer = await answer_customer_question(
-        CustomerQuestion(
-            message=message,
-            channel=normalize_channel(payload.get("channel") or payload.get("platform")),
-            user_id=str(payload.get("user_id") or payload.get("subscriber_id") or ""),
-            first_name=str(payload.get("first_name") or ""),
-            metadata={key: str(value) for key, value in payload.items() if isinstance(value, (str, int, float, bool))},
-        )
-    )
-    _log_customer_inquiry("zapier_customer_question", message, answer)
+    await _refresh_inventory_for_social_posts()
+    question = _customer_question_from_payload(payload, message)
+    answer = await answer_customer_question(question)
+    _log_customer_inquiry("zapier_customer_question", question, answer)
     return answer.model_dump()
 
 
@@ -612,15 +601,10 @@ async def metricool_inbox_webhook(
     message = extract_customer_message(payload)
     if not message:
         raise HTTPException(status_code=400, detail="No conversation text found in payload.")
-    answer = await answer_customer_question(
-        CustomerQuestion(
-            message=message,
-            channel=normalize_channel(payload.get("provider") or payload.get("channel")),
-            user_id=str(payload.get("recipient") or payload.get("conversation") or ""),
-            metadata={key: str(value) for key, value in payload.items() if isinstance(value, (str, int, float, bool))},
-        )
-    )
-    _log_customer_inquiry("metricool_inbox", message, answer)
+    await _refresh_inventory_for_social_posts()
+    question = _customer_question_from_payload(payload, message, channel_key="provider", user_key="recipient")
+    answer = await answer_customer_question(question)
+    _log_customer_inquiry("metricool_inbox", question, answer)
     return {
         "reply": answer.reply,
         "needs_human": answer.needs_human,
@@ -655,15 +639,65 @@ async def parse_zapier_body(request: Request) -> dict[str, Any]:
     return payload
 
 
-def _log_customer_inquiry(source: str, message: str, answer: CustomerAnswer) -> None:
+def _customer_question_from_payload(
+    payload: dict[str, Any],
+    message: str,
+    *,
+    channel_key: str = "channel",
+    user_key: str = "user_id",
+) -> CustomerQuestion:
+    metadata = _customer_metadata_from_payload(payload)
+    user_id = (
+        payload.get(user_key)
+        or payload.get("subscriber_id")
+        or payload.get("user_id")
+        or payload.get("profile_id")
+        or payload.get("sender_id")
+        or ""
+    )
+    conversation_id = payload.get("conversation_id") or payload.get("conversation") or payload.get("thread_id")
+    if conversation_id is not None:
+        metadata["conversation_id"] = str(conversation_id)
+    return CustomerQuestion(
+        message=message,
+        channel=normalize_channel(payload.get(channel_key) or payload.get("platform") or payload.get("channel")),
+        user_id=str(user_id),
+        first_name=str(payload.get("first_name") or payload.get("name") or ""),
+        metadata=metadata,
+    )
+
+
+def _customer_metadata_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for key, value in payload.items():
+        if isinstance(value, (str, int, float, bool)):
+            metadata[str(key)] = str(value)
+    custom_fields = payload.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        for key, value in custom_fields.items():
+            if isinstance(value, (str, int, float, bool)):
+                metadata[str(key)] = str(value)
+    return metadata
+
+
+def _log_customer_inquiry(source: str, question: CustomerQuestion, answer: CustomerAnswer) -> None:
     matched_item = answer.matched_items[0] if answer.matched_items else None
     logger.info(
-        "%s inquiry handled: incoming=%r matched_ebay_item_id=%s response=%r product_url=%s needs_human=%s success=True",
+        "%s inquiry handled: customer_name=%r profile_id=%s post_id=%s conversation_id=%s incoming=%r "
+        "matched_ebay_item_id=%s response=%r product_url=%s recommendations=%s stayed_in_messenger=%s "
+        "redirected_to_ebay=%s needs_human=%s success=True",
         source,
-        message[:500],
-        matched_item.ebay_item_id if matched_item else None,
+        question.first_name,
+        question.user_id,
+        answer.social_post_id or question.metadata.get("post_id"),
+        answer.messenger_conversation_id or question.metadata.get("conversation_id"),
+        question.message[:500],
+        answer.ebay_item_id or (matched_item.ebay_item_id if matched_item else None),
         answer.reply[:500],
-        matched_item.ebay_url if matched_item else None,
+        answer.ebay_listing_url or (matched_item.ebay_url if matched_item else None),
+        [_item.ebay_item_id for _item in answer.recommended_items],
+        answer.conversation_allowed,
+        answer.redirect_to_ebay,
         answer.needs_human,
     )
 

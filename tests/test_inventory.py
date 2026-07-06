@@ -98,3 +98,37 @@ def test_replace_ebay_inventory_snapshot_marks_missing_ebay_rows_inactive(tmp_pa
     assert current_item.listing_status == "IN_STOCK"
     assert demo_item is not None
     assert demo_item.quantity == 2
+
+
+def test_item_for_social_reference_resolves_post_history_to_listing(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku="EBAY-123",
+                ebay_item_id="123",
+                title="Samsung Galaxy S25",
+                quantity=1,
+                ebay_url="https://www.ebay.com/itm/123",
+                image_url="https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
+                listing_status="ACTIVE",
+                source="ebay-browse-api",
+            )
+        ]
+    )
+    repository.record_social_post(
+        ebay_item_id="123",
+        sku="EBAY-123",
+        title="Samsung Galaxy S25",
+        item_url="https://www.ebay.com/itm/123",
+        image_url="https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
+        caption="Post caption",
+        scheduled_at="2026-07-06 09:00:00",
+        platform="facebook,instagram",
+        metricool_post_id="fb-post-123",
+    )
+
+    item = repository.item_for_social_reference("fb-post-123")
+
+    assert item is not None
+    assert item.ebay_item_id == "123"

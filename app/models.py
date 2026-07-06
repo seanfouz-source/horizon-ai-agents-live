@@ -51,7 +51,14 @@ class CustomerAnswer(BaseModel):
     reply: str
     channel: Channel = "unknown"
     matched_items: list[InventoryItem] = Field(default_factory=list)
+    recommended_items: list[InventoryItem] = Field(default_factory=list)
     needs_human: bool = False
+    redirect_to_ebay: bool = False
+    conversation_allowed: bool = True
+    ebay_item_id: str | None = None
+    ebay_listing_url: str | None = None
+    social_post_id: str | None = None
+    messenger_conversation_id: str | None = None
 
 
 class SocialDraftRequest(BaseModel):

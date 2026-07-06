@@ -213,6 +213,51 @@ class InventoryRepository:
             ).fetchone()
         return self._from_row(row) if row else None
 
+    def get_by_ebay_item_id(self, ebay_item_id: str) -> InventoryItem | None:
+        item_id = str(ebay_item_id or "").strip()
+        if not item_id:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM inventory_items
+                WHERE ebay_item_id = ?
+                OR sku = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (item_id, f"EBAY-{item_id}"),
+            ).fetchone()
+        return self._from_row(row) if row else None
+
+    def item_for_social_reference(self, reference: str) -> InventoryItem | None:
+        social_reference = str(reference or "").strip()
+        if not social_reference:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT ebay_item_id, sku
+                FROM social_post_history
+                WHERE metricool_post_id = ?
+                OR CAST(id AS TEXT) = ?
+                OR ebay_item_id = ?
+                OR sku = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (social_reference, social_reference, social_reference, social_reference),
+            ).fetchone()
+        if not row:
+            return None
+        if row["sku"]:
+            item = self.get(str(row["sku"]))
+            if item:
+                return item
+        if row["ebay_item_id"]:
+            return self.get_by_ebay_item_id(str(row["ebay_item_id"]))
+        return None
+
     def search(self, query: str | None, limit: int = 8, in_stock_only: bool = True) -> list[InventoryItem]:
         limit = max(1, min(limit, 25))
         terms = []

@@ -141,8 +141,8 @@ def _candidate_inventory_queries(message: str) -> list[str]:
     return candidates
 
 
-def _matched_items_for_message(message: str):
-    repository = get_repository()
+def _matched_items_for_message(message: str, repository: InventoryRepository | None = None):
+    repository = repository or get_repository()
     matched_items = [item for item in repository.search(message, limit=3) if _is_active_inventory_answer_item(item)]
     if matched_items:
         return matched_items
@@ -237,63 +237,262 @@ def _group_outreach_agent() -> Agent:
 
 
 async def answer_customer_question(question: CustomerQuestion) -> CustomerAnswer:
-    matched_items = _matched_items_for_message(question.message)
-    needs_human = _customer_needs_human(question.message)
-    if matched_items and not needs_human:
-        reply = _manychat_inventory_reply(question.message, matched_items)
-    elif matched_items:
-        reply = (
-            "I can help with the product info, and a team member should review the order/account part.\n\n"
-            + _manychat_inventory_reply(question.message, matched_items)
+    repository = get_repository()
+    context_item = _item_from_customer_context(question, repository)
+    matched_items = _matched_items_for_message(question.message, repository)
+    if matched_items and not context_item and _should_filter_recommendations(question.message):
+        matched_items = _filter_recommendations(question.message, matched_items)
+        if "cheapest" in question.message.lower() or "under" in question.message.lower():
+            matched_items = sorted(matched_items, key=lambda item: item.price if item.price is not None else 999999)
+    if context_item:
+        matched_items = _dedupe_inventory_items([context_item, *matched_items])
+
+    social_post_id = _metadata_value(
+        question.metadata,
+        "post_id",
+        "facebook_post_id",
+        "instagram_post_id",
+        "metricool_post_id",
+        "history_id",
+    )
+    conversation_id = _metadata_value(
+        question.metadata,
+        "conversation_id",
+        "messenger_conversation_id",
+        "thread_id",
+        "chat_id",
+    )
+    primary_item = matched_items[0] if matched_items else None
+    redirect_to_ebay = _requires_ebay_redirect(question.message)
+
+    if primary_item and redirect_to_ebay:
+        reply = _ebay_redirect_reply(primary_item, question.message)
+        recommended_items: list[InventoryItem] = []
+        conversation_allowed = False
+        needs_human = _is_order_support_message(question.message)
+    elif primary_item and not _is_active_inventory_answer_item(primary_item):
+        recommended_items = _recommend_inventory_items(question.message, primary_item, repository)
+        reply = _sold_or_ended_reply(primary_item, recommended_items)
+        conversation_allowed = True
+        needs_human = False
+    elif primary_item:
+        recommended_items = (
+            _dedupe_inventory_items([item for item in matched_items if item.sku != primary_item.sku])[:3]
+            if _message_requests_multiple_options(question.message)
+            else []
         )
+        reply = _manychat_inventory_reply(question.message, matched_items, repository)
+        conversation_allowed = True
+        needs_human = False
     else:
-        reply = (
-            "I don't see an exact match in our active eBay inventory right now. "
-            "You can browse current listings here: "
-            f"{get_settings().ebay_store_backup_url or get_settings().ebay_store_url}\n\n"
-            "A team member can help if you want a similar option."
-        )
-        needs_human = True
+        recommended_items = _recommend_inventory_items(question.message, None, repository)
+        reply = _manychat_no_exact_match_reply(question.message, recommended_items)
+        conversation_allowed = True
+        needs_human = False
+
     logger.info(
-        "ManyChat inventory reply matched %s item(s); needs_human=%s.",
-        len(matched_items),
-        needs_human,
+        "ManyChat eBay sales assistant handled message: profile_id=%s post_id=%s conversation_id=%s "
+        "ebay_item_id=%s redirected_to_ebay=%s stayed_in_messenger=%s recommendations=%s",
+        question.user_id,
+        social_post_id,
+        conversation_id,
+        _item_ebay_item_id(primary_item) if primary_item else None,
+        redirect_to_ebay,
+        conversation_allowed,
+        [_item_ebay_item_id(item) for item in recommended_items],
     )
     return CustomerAnswer(
         reply=reply,
         channel=question.channel,
         matched_items=matched_items,
+        recommended_items=recommended_items,
         needs_human=needs_human,
+        redirect_to_ebay=redirect_to_ebay,
+        conversation_allowed=conversation_allowed,
+        ebay_item_id=_item_ebay_item_id(primary_item) if primary_item else None,
+        ebay_listing_url=_buy_url_for_item(primary_item) if primary_item else None,
+        social_post_id=social_post_id,
+        messenger_conversation_id=conversation_id,
     )
 
 
-def _customer_needs_human(message: str) -> bool:
+ORDER_SUPPORT_KEYWORDS = {
+    "address change",
+    "buyer protection",
+    "cancel",
+    "cancellation",
+    "damaged",
+    "delivery",
+    "dispute",
+    "order",
+    "payment",
+    "refund",
+    "return",
+    "tracking",
+    "warranty",
+}
+
+
+PURCHASE_REDIRECT_KEYWORDS = {
+    "best price",
+    "buy",
+    "cash app",
+    "cashapp",
+    "checkout",
+    "discount",
+    "invoice",
+    "lower price",
+    "make an offer",
+    "negotiate",
+    "offer",
+    "pay",
+    "payment",
+    "purchase",
+    "venmo",
+    "zelle",
+}
+
+
+def _requires_ebay_redirect(message: str) -> bool:
     normalized = message.lower()
-    return any(keyword in normalized for keyword in ["refund", "return", "order", "tracking", "complaint", "warranty"])
+    if _asks_listing_return_policy(normalized):
+        return False
+    return any(keyword in normalized for keyword in ORDER_SUPPORT_KEYWORDS | PURCHASE_REDIRECT_KEYWORDS)
 
 
-def _manychat_inventory_reply(message: str, matched_items: list[InventoryItem]) -> str:
+def _is_order_support_message(message: str) -> bool:
+    normalized = message.lower()
+    if _asks_listing_return_policy(normalized):
+        return False
+    return any(keyword in normalized for keyword in ORDER_SUPPORT_KEYWORDS)
+
+
+def _asks_listing_return_policy(normalized_message: str) -> bool:
+    return "return policy" in normalized_message or (
+        "return" in normalized_message and any(word in normalized_message for word in ("accept", "accepted", "policy"))
+    )
+
+
+def _manychat_inventory_reply(
+    message: str,
+    matched_items: list[InventoryItem],
+    repository: InventoryRepository,
+) -> str:
     items_to_send = matched_items[:3] if _message_requests_multiple_options(message) else matched_items[:1]
     if len(items_to_send) == 1:
         item = items_to_send[0]
-        return (
-            "Yes, this item is currently available.\n\n"
-            f"{item.title}\n"
-            f"Condition: {item.condition or 'See eBay listing'}\n"
-            f"Price: {_manychat_price(item)}\n\n"
-            f"You can view or buy it here: {_buy_url_for_item(item)}"
-        )
-
-    lines = ["Here are a few active listings that match:"]
-    for item in items_to_send:
-        lines.append(
-            "\n"
+        answer_line = _pre_sale_answer_line(message, item)
+        qualifier = _qualifying_question(message)
+        reply = (
+            f"{answer_line}\n\n"
             f"{item.title}\n"
             f"Condition: {item.condition or 'See eBay listing'}\n"
             f"Price: {_manychat_price(item)}\n"
-            f"Link: {_buy_url_for_item(item)}"
+            f"Availability: {_availability_text(item)}\n\n"
+            "You can ask me general product questions here. "
+            f"For the full listing or to message us directly through eBay: {_buy_url_for_item(item)}"
         )
+        if qualifier:
+            reply += f"\n\n{qualifier}"
+        return reply
+
+    lines = ["Here are a few active eBay listings that match:"]
+    for item in items_to_send:
+        lines.append(_manychat_listing_line(item))
+    lines.append("\nI can compare these here, but checkout, offers, and order support should happen through eBay.")
     return "\n".join(lines)
+
+
+def _pre_sale_answer_line(message: str, item: InventoryItem) -> str:
+    normalized = message.lower()
+    if _asks_availability(normalized):
+        return "Yes, this item is currently available." if item.quantity > 0 else "This listing is no longer available."
+    if any(keyword in normalized for keyword in ("price", "cost", "how much")):
+        return f"The listed price is {_manychat_price(item)}."
+    if "condition" in normalized:
+        return f"The listed condition is {item.condition or 'shown on the eBay listing'}."
+    if "unlocked" in normalized:
+        unlocked = _specific_value(item, "unlocked", "lock status", "network")
+        if unlocked:
+            return f"The listing shows: {unlocked}."
+        return _title_confirms_or_listing("unlocked", item)
+    if "carrier" in normalized or "compatible" in normalized:
+        value = _specific_value(item, "carrier", "network", "lock status")
+        return f"The listed carrier/network detail is: {value}." if value else "Carrier compatibility is shown on the eBay listing."
+    if "storage" in normalized or re.search(r"\b\d+\s?gb\b", normalized):
+        value = _specific_value(item, "storage", "capacity", "hard drive capacity")
+        return f"The listed storage/capacity is: {value}." if value else _title_confirms_or_listing("storage", item)
+    if "color" in normalized or "colour" in normalized:
+        value = _specific_value(item, "color", "colour")
+        return f"The listed color is: {value}." if value else _title_confirms_or_listing("color", item)
+    if "model" in normalized:
+        value = _specific_value(item, "model")
+        return f"The listed model is: {value}." if value else f"The listing title shows: {item.title}."
+    if "shipping" in normalized or "ship" in normalized:
+        value = _specific_value(item, "shipping", "shipping cost", "delivery")
+        return f"The listing shipping detail shows: {value}." if value else "Shipping estimates and options are shown on the eBay listing."
+    if "return" in normalized:
+        value = _specific_value(item, "return", "returns", "return policy")
+        return f"The listing return policy shows: {value}." if value else "The return policy is shown on the eBay listing."
+    if "accessor" in normalized or "included" in normalized or "box" in normalized:
+        value = _specific_value(item, "accessories", "included", "package", "bundle")
+        return f"The listing included-items detail shows: {value}." if value else "Included accessories are described in the eBay listing."
+    return "Thanks for your interest. I can help answer general product questions here."
+
+
+def _ebay_redirect_reply(item: InventoryItem, message: str) -> str:
+    if _is_order_support_message(message):
+        return (
+            "I can help with general product questions here, but order status, returns, warranty, payment, "
+            "address changes, cancellations, damaged shipment issues, and buyer protection need to be handled "
+            "through eBay messages because they are tied to your eBay order record.\n\n"
+            f"Please message us directly through this eBay listing: {_buy_url_for_item(item)}"
+        )
+    if any(keyword in message.lower() for keyword in ("offer", "lower price", "best price", "negotiate", "discount")):
+        return (
+            "Pricing and offers are handled through eBay. If offers are enabled, you can send an offer directly "
+            f"through the listing here: {_buy_url_for_item(item)}"
+        )
+    return (
+        "Thanks for your interest. I can help answer general product questions here. "
+        f"This item is available on our eBay store here: {_buy_url_for_item(item)}. "
+        "For purchase, offers, checkout, order status, or buyer protection, please message us directly through the eBay listing."
+    )
+
+
+def _sold_or_ended_reply(item: InventoryItem, recommendations: list[InventoryItem]) -> str:
+    lines = [
+        f"That listing is no longer available on eBay: {item.title}.",
+    ]
+    if recommendations:
+        lines.append("\nHere are similar active listings:")
+        lines.extend(_manychat_listing_line(recommendation) for recommendation in recommendations[:3])
+    else:
+        lines.append(f"\nYou can browse current listings here: {get_settings().ebay_store_backup_url or get_settings().ebay_store_url}")
+    return "\n".join(lines)
+
+
+def _manychat_no_exact_match_reply(message: str, recommendations: list[InventoryItem]) -> str:
+    if recommendations:
+        lines = ["I do not see that exact item, but these active eBay listings may fit:"]
+        lines.extend(_manychat_listing_line(item) for item in recommendations[:3])
+        lines.append("\nWhich carrier, storage size, color, or budget range are you trying to stay within?")
+        return "\n".join(lines)
+    return (
+        "I do not see an exact active eBay listing for that yet. "
+        "Which carrier, model, storage size, color, and budget range are you looking for? "
+        f"You can also browse current listings here: {get_settings().ebay_store_backup_url or get_settings().ebay_store_url}"
+    )
+
+
+def _manychat_listing_line(item: InventoryItem) -> str:
+    return (
+        "\n"
+        f"{item.title}\n"
+        f"Condition: {item.condition or 'See eBay listing'}\n"
+        f"Price: {_manychat_price(item)}\n"
+        f"Link: {_buy_url_for_item(item)}"
+    )
 
 
 def _message_requests_multiple_options(message: str) -> bool:
@@ -311,8 +510,206 @@ def _message_requests_multiple_options(message: str) -> bool:
             "tablets",
             "watches",
             "computers",
+            "alternatives",
+            "cheapest",
+            "under",
+            "newer model",
         )
     )
+
+
+def _should_filter_recommendations(message: str) -> bool:
+    normalized = message.lower()
+    return _message_requests_multiple_options(message) or any(
+        token in normalized
+        for token in ("unlocked", "carrier", "compatible", "storage", "color", "colour")
+    )
+
+
+def _item_from_customer_context(question: CustomerQuestion, repository: InventoryRepository) -> InventoryItem | None:
+    metadata = question.metadata or {}
+    for value in _metadata_values(
+        metadata,
+        "sku",
+        "product_sku",
+        "metricool_product_sku",
+    ):
+        item = repository.get(value)
+        if item:
+            return item
+    for value in _metadata_values(
+        metadata,
+        "ebay_item_id",
+        "item_id",
+        "metricool_ebay_item_id",
+        "product_item_id",
+    ):
+        item = repository.get_by_ebay_item_id(value) if hasattr(repository, "get_by_ebay_item_id") else repository.get(f"EBAY-{value}")
+        if item:
+            return item
+    for value in _metadata_values(metadata, "ebay_url", "link_url", "buy_url", "metricool_ebay_url"):
+        item_id = _item_id_from_text(value)
+        if not item_id:
+            continue
+        item = repository.get_by_ebay_item_id(item_id) if hasattr(repository, "get_by_ebay_item_id") else repository.get(f"EBAY-{item_id}")
+        if item:
+            return item
+    for value in _metadata_values(
+        metadata,
+        "post_id",
+        "facebook_post_id",
+        "instagram_post_id",
+        "metricool_post_id",
+        "history_id",
+    ):
+        if hasattr(repository, "item_for_social_reference"):
+            item = repository.item_for_social_reference(value)
+            if item:
+                return item
+    item_id = _item_id_from_text(question.message)
+    if item_id:
+        item = repository.get_by_ebay_item_id(item_id) if hasattr(repository, "get_by_ebay_item_id") else repository.get(f"EBAY-{item_id}")
+        if item:
+            return item
+    return None
+
+
+def _metadata_value(metadata: dict[str, str], *keys: str) -> str | None:
+    values = _metadata_values(metadata, *keys)
+    return values[0] if values else None
+
+
+def _metadata_values(metadata: dict[str, str], *keys: str) -> list[str]:
+    normalized_lookup = {str(key).lower(): str(value) for key, value in metadata.items() if str(value).strip()}
+    values = []
+    for key in keys:
+        value = normalized_lookup.get(key.lower())
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _item_id_from_text(value: str) -> str | None:
+    match = re.search(r"ebay\.com/itm/(?:[^/?#\s]+/)?(\d+)", value)
+    if match:
+        return match.group(1)
+    match = re.search(r"\bEBAY-(\d+)\b", value)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b(\d{10,15})\b", value)
+    return match.group(1) if match else None
+
+
+def _dedupe_inventory_items(items: list[InventoryItem]) -> list[InventoryItem]:
+    deduped = []
+    seen = set()
+    for item in items:
+        key = _item_ebay_item_id(item) or item.sku
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _recommend_inventory_items(
+    message: str,
+    reference_item: InventoryItem | None,
+    repository: InventoryRepository,
+) -> list[InventoryItem]:
+    query = _recommendation_query(message, reference_item)
+    candidates = [item for item in repository.search(query, limit=25) if _is_active_inventory_answer_item(item)]
+    if not candidates and hasattr(repository, "all_promotable"):
+        candidates = [item for item in repository.all_promotable(limit=25) if _is_active_inventory_answer_item(item)]
+    candidates = [item for item in candidates if not reference_item or item.sku != reference_item.sku]
+    candidates = _filter_recommendations(message, candidates)
+    if "cheapest" in message.lower() or "under" in message.lower():
+        candidates = sorted(candidates, key=lambda item: item.price if item.price is not None else 999999)
+    return _dedupe_inventory_items(candidates)[:3]
+
+
+def _recommendation_query(message: str, reference_item: InventoryItem | None) -> str:
+    normalized = message.lower()
+    if "samsung" in normalized:
+        return "Samsung"
+    if "iphone" in normalized or "apple" in normalized:
+        return "iPhone"
+    if "watch" in normalized:
+        return "Watch"
+    if "tablet" in normalized or "ipad" in normalized:
+        return "tablet"
+    if reference_item:
+        title_tokens = [
+            token
+            for token in re.findall(r"[A-Za-z0-9]+", reference_item.title)
+            if len(token) > 2 and token.lower() not in STOPWORDS
+        ]
+        return " ".join(title_tokens[:3]) or reference_item.title
+    return message
+
+
+def _filter_recommendations(message: str, items: list[InventoryItem]) -> list[InventoryItem]:
+    normalized = message.lower()
+    filtered = items
+    budget_match = re.search(r"(?:under|below|less than)\s*\$?\s*(\d+)", normalized)
+    if budget_match:
+        budget = float(budget_match.group(1))
+        filtered = [item for item in filtered if item.price is not None and item.price <= budget]
+    storage_match = re.search(r"\b(\d{2,4})\s?gb\b", normalized)
+    if storage_match:
+        storage = storage_match.group(1)
+        filtered = [item for item in filtered if storage in _inventory_search_text(item)]
+    for color in ("black", "white", "blue", "red", "green", "pink", "purple", "gold", "silver"):
+        if color in normalized:
+            filtered = [item for item in filtered if color in _inventory_search_text(item)]
+            break
+    if "unlocked" in normalized:
+        filtered = [item for item in filtered if "unlocked" in _inventory_search_text(item)]
+    return filtered or items
+
+
+def _inventory_search_text(item: InventoryItem) -> str:
+    return " ".join(
+        [
+            item.title,
+            item.description or "",
+            item.condition or "",
+            item.category or "",
+            " ".join(f"{key} {value}" for key, value in item.item_specifics.items()),
+        ]
+    ).lower()
+
+
+def _asks_availability(normalized_message: str) -> bool:
+    return any(phrase in normalized_message for phrase in ("available", "in stock", "still have", "sold"))
+
+
+def _availability_text(item: InventoryItem) -> str:
+    if item.quantity > 0 and _is_active_inventory_answer_item(item):
+        return "Available on eBay"
+    return "No longer available"
+
+
+def _specific_value(item: InventoryItem, *keys: str) -> str | None:
+    normalized_keys = [key.lower() for key in keys]
+    for key, value in item.item_specifics.items():
+        key_lower = str(key).lower()
+        if any(target in key_lower for target in normalized_keys) and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _title_confirms_or_listing(term: str, item: InventoryItem) -> str:
+    if term.lower() in item.title.lower():
+        return f"The listing title shows {term}: {item.title}."
+    return f"That detail is shown on the eBay listing when available."
+
+
+def _qualifying_question(message: str) -> str | None:
+    normalized = message.lower()
+    if any(phrase in normalized for phrase in ("not sure", "recommend", "which one", "looking for", "need a phone")):
+        return "Which carrier, storage size, color, and budget range are you trying to stay within?"
+    return None
 
 
 def _manychat_price(item: InventoryItem) -> str:
