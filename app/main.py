@@ -161,29 +161,7 @@ def gmail_oauth_callback(
 @app.on_event("startup")
 async def startup_inventory_sync() -> None:
     seed_inventory_if_empty(repository, settings.seed_inventory_csv)
-    _cancel_test_inventory_social_history()
     asyncio.create_task(_startup_inventory_refresh())
-
-
-def _cancel_test_inventory_social_history() -> None:
-    """Temporary cleanup for production test rows that never reached Metricool."""
-    now = datetime.now(timezone.utc).isoformat()
-    with repository.connect() as connection:
-        cursor = connection.execute(
-            """
-            UPDATE social_post_history
-            SET status = 'cancelled',
-                error_message = 'Cancelled temporary production test queue before live Zap run.',
-                updated_at = ?
-            WHERE status = 'scheduled'
-            AND posted_at IS NULL
-            AND (metricool_post_id IS NULL OR metricool_post_id = '')
-            AND item_url LIKE '%ebay.com/itm/%'
-            """,
-            (now,),
-        )
-    if cursor.rowcount:
-        logger.warning("Cancelled %s temporary inventory social history rows before live Zap run.", cursor.rowcount)
 
 
 async def _startup_inventory_refresh() -> None:
