@@ -678,6 +678,21 @@ async def _create_social_drafts_with_inventory_refresh(
     request: SocialDraftRequest,
 ) -> tuple[SocialDraftBatch, dict[str, Any]]:
     inventory_refresh = await _refresh_inventory_for_social_posts()
+    if request.promote_all_inventory and inventory_refresh.get("status") != "ok":
+        refresh_message = inventory_refresh.get("message")
+        if not isinstance(refresh_message, str) or not refresh_message:
+            refresh_message = "A fresh eBay API inventory sync did not complete."
+        return (
+            SocialDraftBatch(
+                campaign_name="Daily all-inventory promotion",
+                posts=[],
+                notes=(
+                    "Skipped automated inventory posts because the latest eBay API inventory "
+                    f"was not confirmed. {refresh_message}"
+                ),
+            ),
+            inventory_refresh,
+        )
     batch = await create_social_drafts(request)
     _append_inventory_refresh_note(batch, inventory_refresh)
     return batch, inventory_refresh

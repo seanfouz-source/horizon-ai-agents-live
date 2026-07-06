@@ -379,6 +379,60 @@ def test_all_inventory_mode_adds_free_shipping_cta_when_ebay_marks_it_free(monke
     assert "Free Shipping available." in batch.metricool_payloads[0]["post_content"]
 
 
+def test_all_inventory_mode_uses_latest_synced_listing_data(tmp_path, monkeypatch):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku="EBAY-123",
+                ebay_item_id="123",
+                title="Old iPhone Listing",
+                condition="Open box",
+                price=399,
+                quantity=1,
+                ebay_url="https://www.ebay.com/itm/123",
+                image_url="https://example.com/old-image.jpg",
+                listing_status="ACTIVE",
+                source="ebay-browse-api",
+            )
+        ]
+    )
+    repository.replace_ebay_inventory_snapshot(
+        [
+            InventoryItem(
+                sku="EBAY-123",
+                ebay_item_id="123",
+                title="Updated iPhone Listing",
+                condition="Open box",
+                price=429,
+                quantity=1,
+                ebay_url="https://www.ebay.com/itm/123",
+                image_url="https://i.ebayimg.com/images/g/new/s-l1600.jpg",
+                listing_status="IN_STOCK",
+                source="ebay-browse-api",
+            )
+        ]
+    )
+    monkeypatch.setattr(agents_module, "get_repository", lambda: repository)
+    monkeypatch.setattr(
+        agents_module,
+        "default_metricool_publication_times",
+        lambda count, start_at=None: ["2026-05-29 08:00:00"],
+    )
+
+    batch = asyncio.run(
+        agents_module.create_social_drafts(
+            SocialDraftRequest(promote_all_inventory=True, max_products_per_run=1, brand_name="Horizon Wireless")
+        )
+    )
+
+    payload = batch.metricool_payloads[0]
+    assert "Updated iPhone Listing" in payload["post_content"]
+    assert "Old iPhone Listing" not in payload["post_content"]
+    assert "Price: $429.00" in payload["post_content"]
+    assert payload["media_01"] == "https://i.ebayimg.com/images/g/new/s-l1600.jpg"
+
+
 def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):
     items = [
         InventoryItem(sku="EBAY-1", title="Apple iPhone 14 Pro Max", quantity=1, image_url="https://example.com/iphone.jpg"),

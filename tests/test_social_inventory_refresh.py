@@ -65,6 +65,50 @@ def test_social_drafts_refreshes_ebay_api_before_generation(monkeypatch):
     assert "Inventory refreshed from the eBay API" in batch.notes
 
 
+def test_promote_all_inventory_requires_fresh_ebay_api_sync(monkeypatch):
+    order = []
+    inventory_refresh = {
+        "source": "pre-social-refresh",
+        "status": "fallback_ok",
+        "message": "eBay API refresh did not complete; inventory refreshed from fallback.",
+        "ebay_sync": {
+            "status": "failed",
+            "message": "eBay API failed.",
+            "imported": 0,
+            "last_attempt_at": "2026-07-04T12:00:00+00:00",
+        },
+        "store_sync": {
+            "status": "ok",
+            "message": "Imported 2 public eBay listings.",
+            "imported": 2,
+            "last_attempt_at": "2026-07-04T12:01:00+00:00",
+        },
+    }
+
+    async def fake_refresh_inventory_for_social_posts():
+        order.append("sync")
+        return inventory_refresh
+
+    async def fake_create_social_drafts(request):
+        order.append("drafts")
+        return SocialDraftBatch(campaign_name="Daily posts", posts=[], notes="Generated posts.")
+
+    monkeypatch.setattr(main_module, "_refresh_inventory_for_social_posts", fake_refresh_inventory_for_social_posts)
+    monkeypatch.setattr(main_module, "create_social_drafts", fake_create_social_drafts)
+
+    batch, returned_refresh = asyncio.run(
+        main_module._create_social_drafts_with_inventory_refresh(
+            SocialDraftRequest(promote_all_inventory=True, brand_name="Horizon Wireless")
+        )
+    )
+
+    assert order == ["sync"]
+    assert returned_refresh == inventory_refresh
+    assert batch.posts == []
+    assert batch.metricool_payloads == []
+    assert "latest eBay API inventory was not confirmed" in batch.notes
+
+
 def test_social_drafts_falls_back_to_store_page_when_ebay_api_fails(monkeypatch):
     api_status = {
         "source": "ebay-api",
