@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     metricool_user_id: int | None = None
     metricool_brand_label: str = "Horizon Wireless"
     manychat_api_token: str | None = None
+    facebook_page_access_token: str | None = None
+    facebook_page_id: str | None = None
+    facebook_page_name: str = "Horizon Wireless"
+    facebook_graph_api_version: str = "v20.0"
     webhook_shared_secret: str | None = None
     ebay_access_token: str | None = None
     ebay_client_id: str | None = None

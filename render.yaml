@@ -35,6 +35,12 @@ services:
         sync: false
       - key: MANYCHAT_API_TOKEN
         sync: false
+      - key: FACEBOOK_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: FACEBOOK_PAGE_ID
+        sync: false
+      - key: FACEBOOK_PAGE_NAME
+        value: Horizon Wireless
       - key: EBAY_ACCESS_TOKEN
         sync: false
       - key: EBAY_CLIENT_ID

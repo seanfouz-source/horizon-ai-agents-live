@@ -11,6 +11,7 @@ from html import escape
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
@@ -553,6 +554,50 @@ async def zapier_customer_question(
     return answer.model_dump()
 
 
+@app.post("/webhooks/zapier/facebook-comment-auto-reply")
+async def zapier_facebook_comment_auto_reply(
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    payload = await parse_zapier_body(request)
+    message = extract_customer_message(payload)
+    if not message:
+        raise HTTPException(status_code=400, detail="No Facebook comment text found in payload.")
+
+    comment_id = _facebook_comment_id_from_payload(payload)
+    if not comment_id:
+        raise HTTPException(status_code=400, detail="No Facebook comment_id found in payload.")
+
+    if _is_facebook_page_self_comment(payload):
+        return {
+            "status": "skipped",
+            "skipped": True,
+            "reason": "Skipped Horizon Wireless page/admin comment.",
+            "comment_id": comment_id,
+            "reply": "",
+            "facebook_comment_reply_status": "skipped",
+        }
+
+    await _refresh_inventory_for_social_posts()
+    question = _customer_question_from_payload(payload, message)
+    answer = await answer_customer_question(question)
+    _log_customer_inquiry("zapier_facebook_comment_auto_reply", question, answer)
+    facebook_reply = await _post_facebook_comment_reply(comment_id, answer.reply)
+    response = answer.model_dump()
+    response.update(
+        {
+            "status": "posted",
+            "skipped": False,
+            "comment_id": comment_id,
+            "facebook_comment_reply_status": "posted",
+            "facebook_comment_reply_id": facebook_reply.get("id"),
+            "facebook_graph_response": facebook_reply,
+        }
+    )
+    return response
+
+
 @app.post("/webhooks/zapier/social-drafts")
 async def zapier_social_drafts(
     request: Request,
@@ -678,6 +723,96 @@ def _customer_metadata_from_payload(payload: dict[str, Any]) -> dict[str, str]:
             if isinstance(value, (str, int, float, bool)):
                 metadata[str(key)] = str(value)
     return metadata
+
+
+def _facebook_comment_id_from_payload(payload: dict[str, Any]) -> str:
+    direct_keys = (
+        "comment_id",
+        "facebook_comment_id",
+        "commentId",
+        "commentID",
+        "comment id",
+        "id",
+    )
+    for key in direct_keys:
+        value = payload.get(key)
+        if isinstance(value, (str, int)) and str(value).strip():
+            return str(value).strip()
+
+    custom_fields = payload.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        for key in direct_keys:
+            value = custom_fields.get(key)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return str(value).strip()
+    return ""
+
+
+def _is_facebook_page_self_comment(payload: dict[str, Any]) -> bool:
+    configured_page_id = str(settings.facebook_page_id or "").strip()
+    configured_page_name = settings.facebook_page_name.strip().casefold()
+    id_keys = ("commenter_id", "from_id", "user_id", "subscriber_id")
+    name_keys = ("commenter_name", "from_name", "first_name", "name", "author_name")
+
+    if configured_page_id:
+        for key in id_keys:
+            value = payload.get(key)
+            if isinstance(value, (str, int)) and str(value).strip() == configured_page_id:
+                return True
+
+    if configured_page_name:
+        for key in name_keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip().casefold() == configured_page_name:
+                return True
+
+    return False
+
+
+async def _post_facebook_comment_reply(comment_id: str, reply: str) -> dict[str, Any]:
+    token = settings.facebook_page_access_token
+    if not token:
+        raise HTTPException(status_code=503, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured.")
+
+    api_version = settings.facebook_graph_api_version.strip().strip("/")
+    url = f"https://graph.facebook.com/{api_version}/{comment_id}/comments"
+    message = reply[:1900]
+    async with httpx.AsyncClient(timeout=20) as client:
+        for attempt in range(3):
+            try:
+                response = await client.post(url, data={"message": message, "access_token": token})
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {"response": payload}
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code not in {408, 425, 429, 500, 502, 503, 504} or attempt == 2:
+                    detail = _facebook_error_detail(exc.response)
+                    raise HTTPException(status_code=502, detail=f"Facebook comment reply failed: {detail}") from exc
+            except httpx.HTTPError as exc:
+                if attempt == 2:
+                    raise HTTPException(status_code=502, detail=f"Facebook comment reply failed: {exc}") from exc
+            await asyncio.sleep(0.5 * (2**attempt))
+
+    raise HTTPException(status_code=502, detail="Facebook comment reply failed after retries.")
+
+
+def _facebook_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text[:500]
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            code = error.get("code")
+            if message and code:
+                return f"{message} (code {code})"
+            if message:
+                return str(message)
+        return json.dumps(payload)[:500]
+    return str(payload)[:500]
 
 
 def _log_customer_inquiry(source: str, question: CustomerQuestion, answer: CustomerAnswer) -> None:
