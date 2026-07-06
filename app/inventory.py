@@ -382,6 +382,22 @@ class InventoryRepository:
             ).fetchall()
         return {str(row["ebay_item_id"]) for row in rows}
 
+    def promoted_ebay_item_ids_for_day(self, scheduled_day: date | str) -> set[str]:
+        day = scheduled_day.isoformat() if isinstance(scheduled_day, date) else str(scheduled_day)[:10]
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT ebay_item_id
+                FROM social_post_history
+                WHERE substr(scheduled_at, 1, 10) = ?
+                AND ebay_item_id IS NOT NULL
+                AND ebay_item_id != ''
+                AND status NOT IN ('failed', 'cancelled', 'skipped')
+                """,
+                (day,),
+            ).fetchall()
+        return {str(row["ebay_item_id"]) for row in rows}
+
     def last_social_post_at_by_ebay_item_id(self) -> dict[str, str]:
         with self.connect() as connection:
             rows = connection.execute(

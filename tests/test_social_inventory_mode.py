@@ -8,7 +8,7 @@ import pytest
 import app.agents as agents_module
 from app.integrations import default_metricool_publication_times
 from app.inventory import InventoryRepository
-from app.models import InventoryItem, SocialDraftRequest
+from app.models import InventoryItem, SocialDraftRequest, SocialPost
 
 
 @pytest.fixture(autouse=True)
@@ -511,7 +511,7 @@ def test_all_phones_query_looks_past_non_phone_first_items(monkeypatch):
     assert [post.product_sku for post in batch.posts] == ["EBAY-1", "EBAY-2"]
 
 
-def test_all_inventory_mode_records_history_and_cycles_after_full_rotation(tmp_path, monkeypatch):
+def test_all_inventory_mode_records_history_without_same_day_duplicates(tmp_path, monkeypatch):
     repository = InventoryRepository(tmp_path / "inventory.db")
     repository.upsert_items(
         [
@@ -558,12 +558,8 @@ def test_all_inventory_mode_records_history_and_cycles_after_full_rotation(tmp_p
 
     second_batch = asyncio.run(agents_module.create_social_drafts(request))
 
-    assert [post.product_sku for post in second_batch.posts] == ["EBAY-3", "EBAY-2", "EBAY-1"]
-    assert [payload["publication_date_time"] for payload in second_batch.metricool_payloads] == [
-        "2026-07-02 10:30:00",
-        "2026-07-02 11:00:00",
-        "2026-07-02 11:30:00",
-    ]
+    assert second_batch.posts == []
+    assert second_batch.metricool_payloads == []
 
 
 def test_all_inventory_mode_rotates_through_full_store_inventory(tmp_path, monkeypatch):
@@ -644,7 +640,7 @@ def test_all_inventory_mode_matches_composite_ebay_ids_to_history(tmp_path, monk
     )
     for index in range(1, 3):
         repository.record_social_post(
-            ebay_item_id=f"36600000000{index}",
+            ebay_item_id=f"v1|36600000000{index}|0",
             sku=f"EBAY-36600000000{index}",
             title=f"Store Listing {index}",
             item_url=f"https://www.ebay.com/itm/36600000000{index}",
@@ -673,6 +669,48 @@ def test_all_inventory_mode_matches_composite_ebay_ids_to_history(tmp_path, monk
     )
 
     assert {post.product_sku for post in batch.posts} == {"EBAY-366000000003", "EBAY-366000000004"}
+
+
+def test_inventory_scheduler_skips_items_already_scheduled_that_day(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    for index in range(1, 3):
+        repository.record_social_post(
+            ebay_item_id=f"36600000000{index}",
+            sku=f"EBAY-36600000000{index}",
+            title=f"Store Listing {index}",
+            item_url=f"https://www.ebay.com/itm/36600000000{index}",
+            image_url=f"https://i.ebayimg.com/images/g/{index}/s-l1600.jpg",
+            caption="Queued earlier",
+            scheduled_at=f"2026-07-02 09:{(index - 1) * 30:02d}:00",
+            platform="facebook,instagram,tiktok,linkedin",
+        )
+    posts = [
+        SocialPost(
+            platform="facebook",
+            text=f"Store Listing {index}",
+            product_sku=f"EBAY-36600000000{index}",
+            product_title=f"Store Listing {index}",
+            ebay_url=f"https://www.ebay.com/itm/36600000000{index}",
+            media_url=f"https://i.ebayimg.com/images/g/{index}/s-l1600.jpg",
+        )
+        for index in range(1, 5)
+    ]
+
+    scheduled_posts = agents_module._assign_inventory_posts_to_daily_unique_slots(
+        repository,
+        posts,
+        ["2026-07-02 10:00:00", "2026-07-02 10:30:00"],
+        2,
+    )
+
+    assert [post.product_sku for post in scheduled_posts] == [
+        "EBAY-366000000003",
+        "EBAY-366000000004",
+    ]
+    assert [post.suggested_schedule for post in scheduled_posts] == [
+        "2026-07-02 10:00:00",
+        "2026-07-02 10:30:00",
+    ]
 
 
 def test_all_inventory_mode_respects_existing_hourly_history(tmp_path, monkeypatch):
