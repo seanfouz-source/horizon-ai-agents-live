@@ -206,7 +206,9 @@ def test_zapier_social_drafts_response_enables_media_platforms_when_supported():
     response = zapier_social_drafts_response(batch)
 
     assert response["metricool_instagram"] is True
-    assert response["metricool_tiktok"] is True
+    assert response["metricool_tiktok"] is False
+    assert "metricool_tiktok_media_01" not in response
+    assert response["metricool_tiktok_media_01_items"] == [None, None]
 
 
 def test_metricool_payload_adds_generated_product_media_url():
@@ -258,7 +260,7 @@ def test_metricool_payload_replaces_tiktok_png_with_generated_jpeg():
     assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
 
 
-def test_metricool_payload_uses_campaign_video_for_tiktok():
+def test_metricool_payload_disables_tiktok_for_campaign_video():
     payload = metricool_payload(
         SocialPost(
             platform="tiktok",
@@ -269,7 +271,9 @@ def test_metricool_payload_uses_campaign_video_for_tiktok():
         SocialDraftRequest(brand_name="Horizon Wireless", campaign_video="retail"),
     )
 
-    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/campaigns/ebay-retail-store.mp4"
+    assert payload["tiktok"] is False
+    assert "media_01" not in payload
+    assert "tiktok_media_01" not in payload
 
 
 def test_metricool_payload_ignores_descriptive_ai_schedule(monkeypatch):

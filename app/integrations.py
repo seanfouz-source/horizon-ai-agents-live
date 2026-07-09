@@ -66,12 +66,23 @@ def manychat_dynamic_response(answer: CustomerAnswer) -> dict[str, object]:
 
 def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str, object]:
     publication_date_time = _metricool_publication_time(post, request)
+    requested_media_url = post.media_url or request_campaign_media_url(request)
     media_url = _metricool_media_url(post, request)
     post_content = _metricool_post_content(post, request)
     facebook_enabled = _platform_enabled(post, request, "facebook")
     instagram_enabled = _platform_enabled(post, request, "instagram")
-    tiktok_enabled = _platform_enabled(post, request, "tiktok")
     linkedin_enabled = _platform_enabled(post, request, "linkedin")
+    tiktok_video_requested = _platform_enabled(post, request, "tiktok") and _is_video_media(requested_media_url)
+    tiktok_media_url = None if tiktok_video_requested else _tiktok_payload_media({"media_01": media_url})
+    tiktok_enabled = _platform_enabled(post, request, "tiktok") and bool(tiktok_media_url)
+    shared_media_url = (
+        media_url
+        if (
+            not (tiktok_video_requested and not (facebook_enabled or instagram_enabled or linkedin_enabled))
+            and (not _is_video_media(media_url) or facebook_enabled or instagram_enabled or linkedin_enabled)
+        )
+        else None
+    )
     facebook_groups = request.facebook_groups if facebook_enabled and request.facebook_groups else None
     payload: dict[str, object] = {
         "brand_name": request.brand_name,
@@ -88,11 +99,11 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         "instagram_post": post_content,
         "tiktok_post": post_content,
         "linkedin_post": post_content,
-        "media_01": media_url,
-        "facebook_media_01": media_url,
-        "instagram_media_01": media_url,
-        "tiktok_media_01": media_url,
-        "linkedin_media_01": media_url,
+        "media_01": shared_media_url,
+        "facebook_media_01": shared_media_url,
+        "instagram_media_01": shared_media_url,
+        "tiktok_media_01": tiktok_media_url,
+        "linkedin_media_01": shared_media_url,
         "as_draft": request.as_draft,
         "draft": request.as_draft,
         "auto_publish": request.auto_publish,
@@ -147,7 +158,7 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
         "facebook": any(payload.get("facebook") for payload in batch.metricool_payloads),
         "instagram": any(payload.get("instagram") and payload.get("media_01") for payload in batch.metricool_payloads),
         "tiktok": any(
-            payload.get("tiktok") and _is_tiktok_supported_media(payload.get("media_01"))
+            payload.get("tiktok") and _is_tiktok_supported_media(_tiktok_payload_media(payload))
             for payload in batch.metricool_payloads
         ),
         "linkedin": any(payload.get("linkedin") for payload in batch.metricool_payloads),
@@ -156,9 +167,9 @@ def zapier_social_drafts_response(batch: SocialDraftBatch) -> dict[str, object]:
     if platform_flags["tiktok"] and not _is_tiktok_supported_media(flat_media_url):
         flat_media_url = next(
             (
-                payload.get("media_01")
+                _tiktok_payload_media(payload)
                 for payload in batch.metricool_payloads
-                if payload.get("tiktok") and _is_tiktok_supported_media(payload.get("media_01"))
+                if payload.get("tiktok") and _is_tiktok_supported_media(_tiktok_payload_media(payload))
             ),
             flat_media_url,
         )
@@ -277,6 +288,8 @@ def _metricool_line_item_value(payload: dict[str, object], field: str) -> object
         return _csv_value(payload.get(field))
     if field == "post_content" or field.endswith("_post"):
         return _payload_post_content(payload)
+    if field == "tiktok_media_01":
+        return _tiktok_payload_media(payload) if payload.get("tiktok") else None
     if field.endswith("_media_01"):
         return payload.get(field) or payload.get("media_01")
     return payload.get(field)
@@ -322,8 +335,26 @@ def _platform_post_content(payloads: list[dict[str, object]], platform: str) -> 
 def _platform_media_url(payloads: list[dict[str, object]], platform: str) -> object:
     payload = _first_enabled_payload(payloads, platform)
     if payload:
+        if platform == "tiktok":
+            return _tiktok_payload_media(payload)
         return payload.get(f"{platform}_media_01") or payload.get("media_01")
+    if platform == "tiktok":
+        return next(
+            (
+                _tiktok_payload_media(payload)
+                for payload in payloads
+                if payload.get("tiktok") and _tiktok_payload_media(payload)
+            ),
+            None,
+        )
     return next((payload.get("media_01") for payload in payloads if payload.get("media_01")), None)
+
+
+def _tiktok_payload_media(payload: dict[str, object]) -> object:
+    media_url = payload.get("tiktok_media_01") or payload.get("media_01")
+    if _is_video_media(media_url):
+        return None
+    return media_url
 
 
 def _is_video_media(value: object) -> bool:
@@ -336,7 +367,7 @@ def _is_tiktok_supported_media(value: object) -> bool:
     if not isinstance(value, str):
         return False
     path = value.lower().split("?")[0]
-    return path.endswith((".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"))
+    return path.endswith((".jpg", ".jpeg", ".webp"))
 
 
 def _csv_value(value: object) -> str | None:
