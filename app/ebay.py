@@ -485,7 +485,17 @@ class EbayClient:
         usable_urls = [url for url in self._dedupe_urls(urls) if self._usable_image_url(url)]
         if not usable_urls:
             return None
-        return usable_urls[0]
+        return max(
+            enumerate(usable_urls),
+            key=lambda pair: (self._image_url_pixel_hint(pair[1]), -pair[0]),
+        )[1]
+
+    @staticmethod
+    def _image_url_pixel_hint(url: str) -> int:
+        match = re.search(r"/s-l(\d+)(?:[./?]|$)", url.lower())
+        if not match:
+            return 0
+        return int(match.group(1))
 
     @staticmethod
     def _usable_image_url(url: str) -> bool:

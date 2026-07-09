@@ -102,7 +102,7 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_primary_image(monkeypa
     assert items[0].sku == "EBAY-123456789012"
     assert items[0].quantity == 2
     assert items[0].listing_status == "IN_STOCK"
-    assert items[0].image_url == "https://i.ebayimg.com/images/g/demo/s-l300.jpg"
+    assert items[0].image_url == "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"
     assert items[0].image_urls == [
         "https://i.ebayimg.com/images/g/demo/s-l300.jpg",
         "https://i.ebayimg.com/images/g/demo/s-l1600.jpg",

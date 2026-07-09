@@ -96,15 +96,8 @@ def product_card_jpeg(
     return output.getvalue()
 
 
-@lru_cache(maxsize=512)
-def product_card_tiktok_jpeg(
-    sku: str,
-    title: str,
-    price: float | None,
-    condition: str | None,
-    ebay_item_id: str | None,
-) -> bytes:
-    image = _pillow_tiktok_product_card_image(sku, title, price, condition, ebay_item_id)
+def tiktok_ebay_photo_jpeg(source_url: str) -> bytes:
+    image = _pillow_tiktok_ebay_photo_image(_download_image_bytes(source_url))
     output = BytesIO()
     image.save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
@@ -168,50 +161,17 @@ def _pillow_product_card_image(
     return image
 
 
-def _pillow_tiktok_product_card_image(
-    sku: str,
-    title: str,
-    price: float | None,
-    condition: str | None,
-    ebay_item_id: str | None,
-):
-    from PIL import Image, ImageDraw, ImageFont
+def _pillow_tiktok_ebay_photo_image(image_bytes: bytes):
+    from PIL import Image, ImageOps
 
-    image = Image.new("RGB", (TIKTOK_CARD_WIDTH, TIKTOK_CARD_HEIGHT), BACKGROUND)
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 0, TIKTOK_CARD_WIDTH, 420), fill=ACCENT)
-    draw.rectangle((0, 392, TIKTOK_CARD_WIDTH, 420), fill=ACCENT_DARK)
-
-    brand_font = _load_font(ImageFont, 92, bold=True)
-    kicker_font = _load_font(ImageFont, 34, bold=True)
-    title_font = _load_font(ImageFont, 68, bold=True)
-    price_font = _load_font(ImageFont, 88, bold=True)
-    body_font = _load_font(ImageFont, 40)
-    cta_font = _load_font(ImageFont, 48, bold=True)
-
-    draw.text((72, 90), "ExactSpec", font=brand_font, fill=(255, 255, 255))
-    draw.text((78, 210), "EBAY LISTING", font=kicker_font, fill=(219, 234, 254))
-    draw.text((78, 278), "Ready to ship from Horizon Wireless", font=body_font, fill=(239, 246, 255))
-
-    draw.rounded_rectangle((72, 540, TIKTOK_CARD_WIDTH - 72, 1380), radius=24, fill=PANEL, outline=LINE, width=3)
-    y = 620
-    for line in _wrap_for_pillow(_clean_text(title), title_font, 800, draw, 5):
-        draw.text((120, y), line, font=title_font, fill=INK)
-        y += 82
-
-    price_text = "PRICE ON EBAY" if price is None else f"${price:,.2f}"
-    draw.text((120, 1210), price_text, font=price_font, fill=ACCENT_DARK)
-
-    details = [value for value in [condition, sku] if value]
-    y = 1388
-    for detail in details[:3]:
-        draw.text((120, y), _clean_text(str(detail)), font=body_font, fill=MUTED)
-        y += 52
-
-    draw.rounded_rectangle((72, 1650, TIKTOK_CARD_WIDTH - 72, 1772), radius=18, fill=INK)
-    draw.text((120, 1685), "Shop this listing on eBay", font=cta_font, fill=(255, 255, 255))
-
-    return image
+    with Image.open(BytesIO(image_bytes)) as source:
+        source = ImageOps.exif_transpose(source).convert("RGB")
+        source.thumbnail((TIKTOK_CARD_WIDTH, TIKTOK_CARD_HEIGHT), Image.Resampling.LANCZOS)
+        image = Image.new("RGB", (TIKTOK_CARD_WIDTH, TIKTOK_CARD_HEIGHT), (255, 255, 255))
+        x = (TIKTOK_CARD_WIDTH - source.width) // 2
+        y = (TIKTOK_CARD_HEIGHT - source.height) // 2
+        image.paste(source, (x, y))
+        return image
 
 
 def _pixel_product_card_png(
@@ -258,8 +218,62 @@ def product_card_jpeg_for_item(item: InventoryItem) -> bytes:
     return product_card_jpeg(item.sku, item.title, item.price, item.condition, item.ebay_item_id)
 
 
-def product_card_tiktok_jpeg_for_item(item: InventoryItem) -> bytes:
-    return product_card_tiktok_jpeg(item.sku, item.title, item.price, item.condition, item.ebay_item_id)
+def tiktok_ebay_photo_jpeg_for_item(item: InventoryItem) -> bytes:
+    source_url = _preferred_ebay_image_url(item)
+    if not source_url:
+        raise ValueError("Inventory item does not have an eBay image URL.")
+    return tiktok_ebay_photo_jpeg(source_url)
+
+
+def _preferred_ebay_image_url(item: InventoryItem) -> str | None:
+    urls = []
+    if item.image_url:
+        urls.append(item.image_url)
+    urls.extend(item.image_urls)
+    usable_urls = [url for url in _dedupe_urls(urls) if _usable_remote_image_url(url)]
+    if not usable_urls:
+        return None
+    return max(
+        enumerate(usable_urls),
+        key=lambda pair: (_image_url_pixel_hint(pair[1]), -pair[0]),
+    )[1]
+
+
+def _download_image_bytes(url: str) -> bytes:
+    import httpx
+
+    response = httpx.get(url, follow_redirects=True, timeout=20)
+    response.raise_for_status()
+    if not response.content:
+        raise ValueError("Downloaded eBay image was empty.")
+    return response.content
+
+
+def _usable_remote_image_url(url: str) -> bool:
+    lowered = str(url).strip().lower().split("?")[0]
+    return lowered.startswith("https://") and any(
+        marker in lowered
+        for marker in (".jpg", ".jpeg", ".png", ".webp", "/images/", "i.ebayimg.com")
+    )
+
+
+def _image_url_pixel_hint(url: str) -> int:
+    match = re.search(r"/s-l(\d+)(?:[./?]|$)", url.lower())
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def _dedupe_urls(urls: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for url in urls:
+        clean_url = str(url).strip()
+        if not clean_url or clean_url in seen:
+            continue
+        seen.add(clean_url)
+        deduped.append(clean_url)
+    return deduped
 
 
 def _load_font(image_font, size: int, bold: bool = False):
