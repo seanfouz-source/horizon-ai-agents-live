@@ -460,7 +460,9 @@ def test_all_inventory_mode_uses_latest_synced_listing_data(tmp_path, monkeypatc
     assert "Updated iPhone Listing" in payload["post_content"]
     assert "Old iPhone Listing" not in payload["post_content"]
     assert "Price: $429.00" in payload["post_content"]
-    assert payload["media_01"] == "https://i.ebayimg.com/images/g/new/s-l1600.jpg"
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.tiktok.jpg"
+    assert payload["facebook_media_01"] == "https://i.ebayimg.com/images/g/new/s-l1600.jpg"
+    assert payload["tiktok_media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.tiktok.jpg"
 
 
 def test_all_phones_query_excludes_non_phone_inventory(monkeypatch):

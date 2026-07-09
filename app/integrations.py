@@ -76,7 +76,7 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
     tiktok_media_url = (
         None
         if tiktok_video_requested
-        else _tiktok_payload_media({"media_01": media_url})
+        else tiktok_ebay_photo_media_url(post.product_sku, media_url) or _tiktok_payload_media({"media_01": media_url})
     )
     tiktok_enabled = _platform_enabled(post, request, "tiktok") and bool(tiktok_media_url)
     platform_media_url = (
@@ -87,7 +87,7 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         )
         else None
     )
-    shared_media_url = platform_media_url or tiktok_media_url
+    shared_media_url = tiktok_media_url if tiktok_enabled else platform_media_url
     facebook_groups = request.facebook_groups if facebook_enabled and request.facebook_groups else None
     payload: dict[str, object] = {
         "brand_name": request.brand_name,
@@ -391,7 +391,7 @@ def _metricool_media_url(post: SocialPost, request: SocialDraftRequest | None = 
         and "tiktok" in (request.platforms if request else [])
     )
     if media_url:
-        if not needs_tiktok_safe_media or _is_tiktok_supported_media(media_url):
+        if not needs_tiktok_safe_media or _is_tiktok_supported_media(media_url) or _is_ebay_image_media(media_url):
             return media_url
         return None
     if inventory_post or needs_tiktok_safe_media:
@@ -424,6 +424,20 @@ def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str 
         clean_extension = "jpg"
     base_url = get_settings().public_base_url.rstrip("/")
     return f"{base_url}/media/products/{quote(sku, safe='')}.{clean_extension}"
+
+
+def tiktok_ebay_photo_media_url(sku: str | None, source_media_url: object) -> str | None:
+    if not sku or not _is_ebay_image_media(source_media_url):
+        return None
+    base_url = get_settings().public_base_url.rstrip("/")
+    return f"{base_url}/media/products/{quote(sku, safe='')}.tiktok.jpg"
+
+
+def _is_ebay_image_media(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    lowered = value.strip().lower().split("?")[0]
+    return lowered.startswith("https://") and "i.ebayimg.com/" in lowered
 
 
 def _metricool_publication_time(post: SocialPost, request: SocialDraftRequest) -> str:
