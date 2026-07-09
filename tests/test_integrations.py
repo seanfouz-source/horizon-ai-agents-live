@@ -257,7 +257,8 @@ def test_metricool_payload_replaces_tiktok_png_with_generated_jpeg():
         SocialDraftRequest(brand_name="ExactSpec"),
     )
 
-    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.jpg"
+    assert payload["media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.tiktok.jpg"
+    assert payload["tiktok_media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.tiktok.jpg"
 
 
 def test_metricool_payload_disables_tiktok_for_campaign_video():
@@ -334,6 +335,9 @@ def test_metricool_payload_cross_posts_all_inventory_to_requested_platforms():
     assert payload["publicationDate"] == payload["publication_date_time"]
     assert payload["draft"] is False
     assert payload["media_01"] == "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"
+    assert payload["facebook_media_01"] == "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"
+    assert payload["instagram_media_01"] == "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"
+    assert payload["tiktok_media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.tiktok.jpg"
     assert payload["buy_url"] == "https://www.ebay.com/itm/123"
     assert payload["link_url"] == "https://www.ebay.com/itm/123"
     assert payload["facebook_link_url"] == "https://www.ebay.com/itm/123"
@@ -356,7 +360,10 @@ def test_metricool_payload_inventory_posts_never_fall_back_to_banner_media():
         ),
     )
 
+    assert payload["tiktok_media_01"] == "https://horizon-ai-agents.onrender.com/media/products/EBAY-123.tiktok.jpg"
     assert "media_01" not in payload
+    assert "facebook_media_01" not in payload
+    assert "https://example.com/banner.jpg" not in payload.values()
 
 
 def test_apply_tiktok_daily_post_cap_keeps_other_platforms_active():

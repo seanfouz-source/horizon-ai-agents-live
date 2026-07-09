@@ -73,9 +73,13 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
     instagram_enabled = _platform_enabled(post, request, "instagram")
     linkedin_enabled = _platform_enabled(post, request, "linkedin")
     tiktok_video_requested = _platform_enabled(post, request, "tiktok") and _is_video_media(requested_media_url)
-    tiktok_media_url = None if tiktok_video_requested else _tiktok_payload_media({"media_01": media_url})
+    tiktok_media_url = (
+        None
+        if tiktok_video_requested
+        else generated_tiktok_product_media_url(post.product_sku) or _tiktok_payload_media({"media_01": media_url})
+    )
     tiktok_enabled = _platform_enabled(post, request, "tiktok") and bool(tiktok_media_url)
-    shared_media_url = (
+    platform_media_url = (
         media_url
         if (
             not (tiktok_video_requested and not (facebook_enabled or instagram_enabled or linkedin_enabled))
@@ -83,6 +87,8 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         )
         else None
     )
+    has_other_enabled_platform = facebook_enabled or instagram_enabled or linkedin_enabled
+    shared_media_url = tiktok_media_url if tiktok_enabled and not has_other_enabled_platform else platform_media_url
     facebook_groups = request.facebook_groups if facebook_enabled and request.facebook_groups else None
     payload: dict[str, object] = {
         "brand_name": request.brand_name,
@@ -100,10 +106,10 @@ def metricool_payload(post: SocialPost, request: SocialDraftRequest) -> dict[str
         "tiktok_post": post_content,
         "linkedin_post": post_content,
         "media_01": shared_media_url,
-        "facebook_media_01": shared_media_url,
-        "instagram_media_01": shared_media_url,
+        "facebook_media_01": platform_media_url,
+        "instagram_media_01": platform_media_url,
         "tiktok_media_01": tiktok_media_url,
-        "linkedin_media_01": shared_media_url,
+        "linkedin_media_01": platform_media_url,
         "as_draft": request.as_draft,
         "draft": request.as_draft,
         "auto_publish": request.auto_publish,
@@ -421,6 +427,13 @@ def generated_product_media_url(sku: str | None, extension: str = "jpg") -> str 
         clean_extension = "jpg"
     base_url = get_settings().public_base_url.rstrip("/")
     return f"{base_url}/media/products/{quote(sku, safe='')}.{clean_extension}"
+
+
+def generated_tiktok_product_media_url(sku: str | None) -> str | None:
+    if not sku:
+        return None
+    base_url = get_settings().public_base_url.rstrip("/")
+    return f"{base_url}/media/products/{quote(sku, safe='')}.tiktok.jpg"
 
 
 def _metricool_publication_time(post: SocialPost, request: SocialDraftRequest) -> str:
