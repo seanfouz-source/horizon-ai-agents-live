@@ -201,6 +201,33 @@ def test_gmail_access_token_ignores_legacy_refresh_token_env(monkeypatch):
     assert b"old-token" not in requests[0].data
 
 
+def test_gmail_access_token_accepts_copied_env_assignment(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps({"access_token": "ya29.test"}).encode("utf-8")
+
+    def fake_urlopen(request, timeout=60):
+        requests.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr(report_email, "urlopen", fake_urlopen)
+    monkeypatch.setenv("GMAIL_REFRESH_TOKEN_CURRENT", "GMAIL_REFRESH_TOKEN_CURRENT=fresh-token")
+
+    assert report_email.gmail_access_token(client_id="client-id", client_secret="client-secret") == "ya29.test"
+
+    assert len(requests) == 1
+    assert b"refresh_token=fresh-token" in requests[0].data
+    assert b"GMAIL_REFRESH_TOKEN_CURRENT" not in requests[0].data
+
+
 def test_send_gmail_message_includes_google_send_error_body(monkeypatch):
     calls = []
 

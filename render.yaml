@@ -87,3 +87,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.13
+      - key: WEBHOOK_SHARED_SECRET
+        sync: false

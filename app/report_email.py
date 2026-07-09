@@ -181,7 +181,7 @@ def gmail_access_token(
     refresh_token: str | None = None,
 ) -> str:
     credentials = gmail_oauth_credentials(client_id=client_id, client_secret=client_secret)
-    resolved_refresh_token = (refresh_token or os.getenv("GMAIL_REFRESH_TOKEN_CURRENT", "")).strip()
+    resolved_refresh_token = _clean_gmail_refresh_token(refresh_token or os.getenv("GMAIL_REFRESH_TOKEN_CURRENT", ""))
     if not resolved_refresh_token:
         raise ReportEmailError("GMAIL_REFRESH_TOKEN_CURRENT is required")
 
@@ -202,7 +202,14 @@ def gmail_access_token(
         with urlopen(request, timeout=60) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise ReportEmailError(f"Gmail OAuth token refresh failed: {_http_error_detail(exc)}") from exc
+        detail = _http_error_detail(exc)
+        if "invalid_grant" in detail:
+            detail = (
+                f"{detail}. Reconnect Gmail with the same Google OAuth client, save the new "
+                "GMAIL_REFRESH_TOKEN_CURRENT value, restart the web service, and make sure "
+                "the Google OAuth consent screen is not left in Testing for long-lived Gmail tokens"
+            )
+        raise ReportEmailError(f"Gmail OAuth token refresh failed: {detail}") from exc
     except Exception as exc:
         raise ReportEmailError(f"Gmail OAuth token refresh failed: {exc}") from exc
 
@@ -210,6 +217,15 @@ def gmail_access_token(
     if not isinstance(access_token, str) or not access_token:
         raise ReportEmailError("Gmail OAuth response did not include an access token")
     return access_token
+
+
+def _clean_gmail_refresh_token(value: str) -> str:
+    token = value.strip().strip("\"'")
+    if "=" in token:
+        key, candidate = token.split("=", 1)
+        if key.strip() == "GMAIL_REFRESH_TOKEN_CURRENT":
+            token = candidate.strip().strip("\"'")
+    return token
 
 
 def exchange_gmail_authorization_code(

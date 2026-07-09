@@ -55,6 +55,7 @@ from app.report_email import (
     ReportEmailError,
     build_message_from_settings,
     exchange_gmail_authorization_code,
+    gmail_access_token,
     gmail_oauth_credentials,
     send_message_from_settings,
 )
@@ -121,6 +122,51 @@ def gmail_oauth_start(
         }
     )
     return RedirectResponse(authorization_url, status_code=302)
+
+
+@app.get("/gmail/oauth/status")
+def gmail_oauth_status(
+    secret: str | None = None,
+    test_refresh: bool = False,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, secret)
+    try:
+        credentials = gmail_oauth_credentials(settings=settings)
+    except ReportEmailError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    raw_refresh_token = settings.gmail_refresh_token_current or ""
+    clean_refresh_token = _diagnostic_clean_gmail_refresh_token(raw_refresh_token)
+    status: dict[str, Any] = {
+        "report_email_provider": settings.report_email_provider,
+        "gmail_sender": settings.gmail_sender or settings.report_email_from,
+        "public_base_url": settings.public_base_url,
+        "redirect_uri": _gmail_oauth_redirect_uri(),
+        "gmail_client_credentials_file": str(settings.gmail_client_credentials_file or "auto/default"),
+        "gmail_client_id_hint": _diagnostic_hint(credentials.client_id),
+        "gmail_client_id_sha256": _diagnostic_sha256(credentials.client_id),
+        "gmail_refresh_token_current_present": bool(clean_refresh_token),
+        "gmail_refresh_token_current_length": len(clean_refresh_token),
+        "gmail_refresh_token_current_sha256": _diagnostic_sha256(clean_refresh_token) if clean_refresh_token else None,
+        "gmail_refresh_token_current_has_assignment_prefix": raw_refresh_token.strip().startswith(
+            "GMAIL_REFRESH_TOKEN_CURRENT="
+        ),
+    }
+
+    if test_refresh:
+        try:
+            gmail_access_token(
+                client_id=credentials.client_id,
+                client_secret=credentials.client_secret,
+                refresh_token=raw_refresh_token,
+            )
+        except ReportEmailError as exc:
+            status["refresh_test"] = {"status": "failed", "error": str(exc)}
+        else:
+            status["refresh_test"] = {"status": "ok"}
+
+    return status
 
 
 @app.get("/oauth2callback", response_class=HTMLResponse)
@@ -1434,6 +1480,25 @@ def _gmail_oauth_state_secret() -> str:
     if settings.webhook_shared_secret:
         return settings.webhook_shared_secret
     return gmail_oauth_credentials(settings=settings).client_secret
+
+
+def _diagnostic_clean_gmail_refresh_token(value: str) -> str:
+    token = value.strip().strip("\"'")
+    if "=" in token:
+        key, candidate = token.split("=", 1)
+        if key.strip() == "GMAIL_REFRESH_TOKEN_CURRENT":
+            token = candidate.strip().strip("\"'")
+    return token
+
+
+def _diagnostic_hint(value: str) -> str:
+    if len(value) <= 12:
+        return "*" * len(value)
+    return f"{value[:6]}...{value[-6:]}"
+
+
+def _diagnostic_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _urlsafe_b64encode(value: bytes) -> str:

@@ -123,9 +123,12 @@ Render can send the same report without Zapier or GitHub:
 2. To send from Gmail, set `REPORT_EMAIL_PROVIDER=gmail`, `REPORT_EMAIL_FROM=sean.fouz@gmail.com`, and `GMAIL_SENDER=sean.fouz@gmail.com`.
 3. Add Google OAuth variables to the web service in Render: `GMAIL_CLIENT_ID` plus either `GMAIL_CLIENT_SECRET`, `GMAIL_CLIENT_SECRET_FILE`, or `GMAIL_CLIENT_CREDENTIALS_FILE`. A Google OAuth JSON secret file can also be uploaded to Render as a secret file; Render mounts it at `/etc/secrets/<filename>`.
 4. Add `https://horizon-ai-agents.onrender.com` as the Google OAuth JavaScript origin and `https://horizon-ai-agents.onrender.com/oauth2callback` as the authorized redirect URI.
-5. Open `/gmail/oauth/start?secret=YOUR_WEBHOOK_SHARED_SECRET` on the Render web service, approve Gmail access, then copy the returned `GMAIL_REFRESH_TOKEN` into the Render web service environment.
-6. The Cron Job runs `python scripts/post_render_daily_report_email.py`, which calls `POST https://horizon-ai-agents.onrender.com/reports/daily/email` and prints any error response body while Gmail and Metricool credentials stay on the web service.
-7. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
+5. Open `/gmail/oauth/start?secret=YOUR_WEBHOOK_SHARED_SECRET` on the Render web service, approve Gmail access, then copy the returned `GMAIL_REFRESH_TOKEN_CURRENT` value into the Render web service environment.
+6. Copy the same `WEBHOOK_SHARED_SECRET` value from the web service into the `horizon-daily-report-email` Cron Job environment so the cron can call the protected email endpoint.
+7. In Google Cloud, keep the OAuth consent screen published/in production for long-lived Gmail refresh tokens. Google expires refresh tokens after 7 days when an external OAuth app is left in Testing and requests scopes beyond basic profile/email/openid.
+8. To check the live Gmail configuration without exposing secrets, open `/gmail/oauth/status?secret=YOUR_WEBHOOK_SHARED_SECRET&test_refresh=true`. It reports token/client fingerprints and whether Google accepts the refresh token.
+9. The Cron Job runs `python scripts/post_render_daily_report_email.py`, which calls `POST https://horizon-ai-agents.onrender.com/reports/daily/email` and prints any error response body while Gmail and Metricool credentials stay on the web service.
+10. For a manual test from the live web service, `POST /reports/daily/email?dry_run=true` prepares the email, and `POST /reports/daily/email` sends it.
 
 Example social draft request:
 
