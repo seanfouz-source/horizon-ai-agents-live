@@ -143,7 +143,11 @@ def test_daily_metricool_report_markdown_and_zapier_flattening():
     assert flattened["content_posts"] == 1
     assert flattened["platform_placements"] == 1
     assert flattened["published_posts"] == 1
-    assert flattened["analytics_note"] == "Metricool returned 1 post-level analytics records with numeric metrics."
+    assert flattened["analytics_note"] == (
+        "Metricool returned 1 post-level analytics records with cumulative metrics as of email generation time."
+    )
+    assert "Metricool post metrics are cumulative as of email generation time." in flattened["email_body"]
+    assert "- Platform-reported clicks: 5" in flattened["email_body"]
     assert flattened["top_post_rows"].startswith("- Facebook: 100 impressions/views")
     assert flattened["clicks"] == 5
     assert flattened["best_platform"] == "facebook"
@@ -188,6 +192,43 @@ def test_report_email_body_explains_metricool_records_without_numeric_metrics():
     assert "- LinkedIn: 0 impressions/views, 0 reach, 0 clicks, 0 engagements - Horizon Wireless listing update" in body
     assert "URL: https://linkedin.com/feed/update/1" in body
     assert "- No failed Metricool posts found for this report date." in body
+
+
+def test_metric_fallbacks_skip_zero_and_accept_numeric_strings_without_inventing_reach():
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/admin/simpleProfiles"):
+            return httpx.Response(200, json=[{"id": 1, "userId": 2, "label": "Horizon Wireless"}])
+        if path.endswith("/v2/scheduler/posts"):
+            return httpx.Response(200, json={"data": []})
+        if path.endswith("/v2/analytics/posts/facebook"):
+            return httpx.Response(200, json={"data": [{"impressions": 0, "videoViews": "25"}]})
+        if path.endswith("/v2/analytics/posts/instagram"):
+            return httpx.Response(200, json={"data": [{"impressions": 0, "views": "40", "reach": "12"}]})
+        if path.endswith("/v2/analytics/posts/tiktok"):
+            return httpx.Response(200, json={"data": [{"viewCount": "60", "reach": 0}]})
+        if path.endswith("/v2/analytics/posts/linkedin"):
+            return httpx.Response(200, json={"data": [{"impressions": "10", "uniqueImpressions": 0}]})
+        return httpx.Response(404, json={"error": path})
+
+    async def run_report():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://app.metricool.com") as client:
+            return await build_daily_metricool_report(
+                date(2026, 7, 16),
+                settings=Settings(metricool_api_token="token"),
+                client=client,
+            )
+
+    report = asyncio.run(run_report())
+    rows = {row["platform"]: row for row in report["platforms"]}
+
+    assert report["totals"]["impressions"] == 135
+    assert rows["instagram"]["impressions"] == 40
+    assert rows["instagram"]["reach"] == 12
+    assert rows["tiktok"]["impressions"] == 60
+    assert rows["tiktok"]["reach"] == 0
+    assert rows["linkedin"]["impressions"] == 10
+    assert rows["linkedin"]["reach"] == 0
 
 
 def test_daily_metricool_report_pdf_renders():

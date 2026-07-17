@@ -69,8 +69,10 @@ async def build_daily_metricool_report(
         "failures": _failed_provider_statuses(scheduled_posts),
         "recommendations": _recommendations(platform_rows, scheduled_posts),
         "notes": [
-            "Metricool analytics can lag after a post publishes.",
-            "eBay clicks are a traffic proxy from social platforms unless eBay API/order data is connected.",
+            "Metrics are cumulative for posts published on the report date and reflect the latest Metricool sync at report time.",
+            "Metricool analytics can lag after a post publishes, and each social network syncs independently.",
+            "Reach is included only when the source platform reports a reach metric.",
+            "Clicks are platform-reported post clicks, not confirmed eBay visits, unless tracked links are used.",
         ],
     }
 
@@ -93,7 +95,7 @@ def format_daily_report_markdown(report: dict[str, Any]) -> str:
         f"- Analytics posts returned: {totals['analytics_posts']}",
         f"- Impressions/views: {totals['impressions']}",
         f"- Reach: {totals['reach']}",
-        f"- eBay click proxy: {totals['clicks']}",
+        f"- Platform-reported clicks: {totals['clicks']}",
         f"- Engagement actions: {totals['engagement_actions']}",
         f"- Engagement rate: {totals['engagement_rate']}%",
         "",
@@ -203,7 +205,7 @@ def format_daily_report_pdf(report: dict[str, Any]) -> bytes:
         ["Published", totals["published_posts"], "Pending", totals["pending_posts"]],
         ["Failed", totals["failed_posts"], "Analytics Posts", totals["analytics_posts"]],
         ["Impressions/Views", totals["impressions"], "Reach", totals["reach"]],
-        ["eBay Click Proxy", totals["clicks"], "Engagement Rate", f"{totals['engagement_rate']}%"],
+        ["Platform Clicks", totals["clicks"], "Engagement Rate", f"{totals['engagement_rate']}%"],
     ]
     story.append(_pdf_table(summary_rows, [1.55 * inch, 1.1 * inch, 1.45 * inch, 1.1 * inch]))
 
@@ -295,6 +297,8 @@ def report_email_body(report: dict[str, Any], attachment_url: str | None = None)
     return (
         f"Attached is the Horizon Wireless AI Marketing Report for {report['report_date']}.\n\n"
         f"{attachment_line}"
+        "Metricool post metrics are cumulative as of email generation time. "
+        "Reach is shown only when the source platform supplies it.\n\n"
         "Quick snapshot:\n"
         f"- Content posts scheduled: {totals['content_posts']}\n"
         f"- Platform placements tracked: {totals['platform_placements']}\n"
@@ -304,7 +308,7 @@ def report_email_body(report: dict[str, Any], attachment_url: str | None = None)
         f"- Metricool analytics posts returned: {totals['analytics_posts']}\n"
         f"- Impressions/views: {totals['impressions']}\n"
         f"- Reach: {totals['reach']}\n"
-        f"- eBay click proxy: {totals['clicks']}\n"
+        f"- Platform-reported clicks: {totals['clicks']}\n"
         f"- Engagement actions: {totals['engagement_actions']}\n"
         f"- Engagement rate: {totals['engagement_rate']}%"
         f"{best_line}\n\n"
@@ -378,7 +382,10 @@ def _metricool_analytics_note(report: dict[str, Any]) -> str:
     if totals["analytics_posts"] == 0:
         return "Metricool returned no post-level analytics records yet for this date."
     if has_numeric_metrics:
-        return f"Metricool returned {totals['analytics_posts']} post-level analytics records with numeric metrics."
+        return (
+            f"Metricool returned {totals['analytics_posts']} post-level analytics records with cumulative metrics "
+            "as of email generation time."
+        )
     return (
         f"Metricool returned {totals['analytics_posts']} post records, but numeric metrics are still 0/not available yet. "
         "Metricool analytics can lag after posts publish."
@@ -743,13 +750,24 @@ def _recommendations(platform_rows: list[dict[str, Any]], scheduled_posts: list[
 
 
 def _number(post: dict[str, Any], *keys: str) -> int:
+    zero_value = 0
     for key in keys:
         value = post.get(key)
         if isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
-            return int(value)
-    return 0
+            number = int(value)
+        elif isinstance(value, str):
+            try:
+                number = int(float(value.strip()))
+            except ValueError:
+                continue
+        else:
+            continue
+        if number:
+            return number
+        zero_value = number
+    return zero_value
 
 
 def _impressions(platform: str, post: dict[str, Any]) -> int:
@@ -764,8 +782,8 @@ def _reach(platform: str, post: dict[str, Any]) -> int:
     if platform == "facebook":
         return _number(post, "impressionsUnique", "reach")
     if platform == "linkedin":
-        return _number(post, "uniqueImpressions", "impressions")
-    return _number(post, "reach", "viewCount")
+        return _number(post, "uniqueImpressions", "reach")
+    return _number(post, "reach")
 
 
 def _clicks(platform: str, post: dict[str, Any]) -> int:

@@ -112,14 +112,14 @@ For daily reporting:
 
 GitHub Actions can send the same report without Zapier:
 
-1. Workflow: `.github/workflows/daily-report-email.yml`, scheduled for `08:10 UTC` daily.
+1. Workflow: `.github/workflows/daily-report-email.yml`, scheduled for `15:10 UTC` daily so Metricool's overnight sync has time to complete.
 2. Script: `python scripts/send_daily_report_email.py`.
 3. Required GitHub Secrets: `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`.
 4. Optional GitHub Secrets or Variables: `SMTP_PORT`, `SMTP_SECURITY`, `REPORT_BASE_URL`, `REPORT_EMAIL_TO`, `REPORT_EMAIL_FROM`, `REPORT_EMAIL_FROM_NAME`, and `WEBHOOK_SHARED_SECRET`.
 
 Render can send the same report without Zapier or GitHub:
 
-1. The `render.yaml` blueprint includes a `horizon-daily-report-email` Cron Job scheduled at `15 5 * * *`.
+1. The `render.yaml` blueprint includes a `horizon-daily-report-email` Cron Job scheduled at `0 15 * * *` (9:00 AM CST / 10:00 AM CDT), after Metricool's overnight sync window.
 2. To send from Gmail, set `REPORT_EMAIL_PROVIDER=gmail`, `REPORT_EMAIL_FROM=sean.fouz@gmail.com`, and `GMAIL_SENDER=sean.fouz@gmail.com`.
 3. Add Google OAuth variables to the web service in Render: `GMAIL_CLIENT_ID` plus either `GMAIL_CLIENT_SECRET`, `GMAIL_CLIENT_SECRET_FILE`, or `GMAIL_CLIENT_CREDENTIALS_FILE`. A Google OAuth JSON secret file can also be uploaded to Render as a secret file; Render mounts it at `/etc/secrets/<filename>`.
 4. Add `https://horizon-ai-agents.onrender.com` as the Google OAuth JavaScript origin and `https://horizon-ai-agents.onrender.com/oauth2callback` as the authorized redirect URI.

@@ -83,7 +83,7 @@ services:
     plan: starter
     buildCommand: python --version
     startCommand: python scripts/post_render_daily_report_email.py
-    schedule: "15 5 * * *"
+    schedule: "0 15 * * *"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.13
