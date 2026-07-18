@@ -7,8 +7,6 @@ on:
         description: "Optional report date, YYYY-MM-DD. Blank uses yesterday in Central time."
         required: false
         type: string
-  schedule:
-    - cron: "10 15 * * *"
 
 jobs:
   send-report:
