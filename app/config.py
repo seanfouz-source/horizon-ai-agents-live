@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     ebay_seller_username: str = "exactspec-electronics"
     ebay_browse_search_query: str = " "
     ebay_expand_item_groups: bool = True
+    ebay_use_access_token_for_trading: bool = True
     ebay_trading_compatibility_level: str = "1455"
     ebay_store_url: str = "https://www.ebay.com/str/exactspec"
     ebay_store_backup_url: str | None = "https://ebay.us/m/GDmaKw"

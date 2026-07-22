@@ -203,7 +203,10 @@ variation. When an eBay refresh token is configured, the importer additionally
 calls Trading API `GetItem` as the listing owner. That owner-only step recovers
 the original seller SKUs, variation-level UPC/EAN/ISBN values, exact available
 quantity, item specifics, variation images, and packaged weight when those values
-are saved on eBay. It stores active, available SKU rows only.
+are saved on eBay. A manually generated OAuth User Token in `EBAY_ACCESS_TOKEN`
+can run the same Trading API enrichment while that short-lived token remains
+valid; a refresh token is still preferred for unattended syncs. It stores active,
+available SKU rows only.
 
 By default, social draft endpoints refresh inventory before generating Metricool
 payloads (`SYNC_INVENTORY_BEFORE_SOCIAL_POSTS=true`). This lets newly changed

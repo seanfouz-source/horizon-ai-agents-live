@@ -23,7 +23,8 @@ class EbayClient:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._access_token = self._clean_access_token(settings.ebay_access_token)
+        self._configured_access_token = self._clean_access_token(settings.ebay_access_token)
+        self._access_token = self._configured_access_token
         if not self._access_token and not self._has_refresh_credentials() and not self._has_client_credentials():
             raise RuntimeError(
                 "EBAY_ACCESS_TOKEN, eBay OAuth refresh credentials, or EBAY_CLIENT_ID/EBAY_CLIENT_SECRET "
@@ -47,7 +48,7 @@ class EbayClient:
         browse_items = await self._fetch_browse_seller_items(seller_username, limit=limit)
         if browse_items:
             logger.info("Imported %s active eBay listings through Browse API.", len(browse_items))
-        if browse_items and self._has_refresh_credentials():
+        if browse_items and self._has_trading_user_token():
             try:
                 trading_items = await self._enrich_with_trading_api(browse_items)
             except (httpx.HTTPError, RuntimeError) as exc:
@@ -248,7 +249,12 @@ class EbayClient:
     async def _enrich_with_trading_api(self, browse_items: list[InventoryItem]) -> list[InventoryItem]:
         enriched: list[InventoryItem] = []
         async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
-            await self._ensure_access_token(client)
+            if self._has_refresh_credentials():
+                await self._ensure_access_token(client)
+            elif self._configured_access_token:
+                self._access_token = self._configured_access_token
+            else:
+                return browse_items
             for browse_item in browse_items:
                 if not browse_item.ebay_item_id:
                     enriched.append(browse_item)
@@ -640,6 +646,12 @@ class EbayClient:
             for field in ("ebay_client_id", "ebay_client_secret")
         )
 
+    def _has_trading_user_token(self) -> bool:
+        return self._has_refresh_credentials() or bool(
+            self._configured_access_token
+            and getattr(self.settings, "ebay_use_access_token_for_trading", False)
+        )
+
     async def _ensure_access_token(
         self,
         client: httpx.AsyncClient,
@@ -650,6 +662,8 @@ class EbayClient:
             refreshed_token = await self._client_credentials_access_token(client)
         elif self._has_refresh_credentials():
             refreshed_token = await self._refresh_access_token(client)
+        elif self._access_token:
+            refreshed_token = None
         elif self._has_client_credentials():
             refreshed_token = await self._client_credentials_access_token(client)
         else:
@@ -1179,6 +1193,8 @@ class EbayClient:
                 token = await self._client_credentials_access_token(client)
             elif self._has_refresh_credentials():
                 token = await self._refresh_access_token(client)
+            elif self._configured_access_token:
+                return False
             elif self._has_client_credentials():
                 token = await self._client_credentials_access_token(client)
             else:

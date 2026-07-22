@@ -27,6 +27,8 @@ services:
         value: " "
       - key: EBAY_EXPAND_ITEM_GROUPS
         value: "true"
+      - key: EBAY_USE_ACCESS_TOKEN_FOR_TRADING
+        value: "true"
       - key: EBAY_TRADING_COMPATIBILITY_LEVEL
         value: "1455"
       - key: SYNC_EBAY_API_ON_STARTUP

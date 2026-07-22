@@ -603,6 +603,81 @@ def test_ebay_client_uses_application_token_for_browse_after_refresh_token_sell_
     assert requests[2][2]["grant_type"] == "client_credentials"
 
 
+def test_ebay_client_restores_static_user_token_for_trading_after_browse(monkeypatch):
+    requests = []
+    trading_payload = b"""<?xml version="1.0" encoding="utf-8"?>
+    <GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+      <Ack>Success</Ack>
+      <Item>
+        <ItemID>123456789012</ItemID><SKU>PHONE-1</SKU><Title>Phone</Title>
+        <ConditionDisplayName>Open box</ConditionDisplayName><Quantity>1</Quantity>
+        <PictureDetails><PictureURL>https://i.ebayimg.com/images/g/demo/s-l1600.jpg</PictureURL></PictureDetails>
+        <ShippingPackageDetails><WeightMajor unit="lbs">1</WeightMajor></ShippingPackageDetails>
+        <ProductListingDetails><UPC>887276900123</UPC></ProductListingDetails>
+        <SellingStatus><ListingStatus>Active</ListingStatus><QuantitySold>0</QuantitySold>
+          <CurrentPrice currencyID="USD">500.00</CurrentPrice></SellingStatus>
+      </Item>
+    </GetItemResponse>"""
+
+    def handler(path, payload, headers, method):
+        requests.append((method, path, headers))
+        request = httpx.Request(method, f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/inventory_item":
+            assert headers["Authorization"] == "Bearer seller-user-token"
+            return httpx.Response(403, json={"error": "missing sell scope"}, request=request)
+        if path == "/identity/v1/oauth2/token":
+            assert payload["grant_type"] == "client_credentials"
+            return httpx.Response(200, json={"access_token": "browse-application-token"}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            assert headers["Authorization"] == "Bearer browse-application-token"
+            return httpx.Response(
+                200,
+                json={
+                    "itemSummaries": [
+                        {
+                            "itemId": "v1|123456789012|0",
+                            "legacyItemId": "123456789012",
+                            "title": "Phone",
+                            "image": {"imageUrl": "https://i.ebayimg.com/images/g/demo/s-l1600.jpg"},
+                            "estimatedAvailabilities": [
+                                {"estimatedAvailabilityStatus": "IN_STOCK", "estimatedAvailableQuantity": 1}
+                            ],
+                        }
+                    ],
+                    "total": 1,
+                },
+                request=request,
+            )
+        if path == "/buy/browse/v1/item/v1|123456789012|0":
+            return httpx.Response(404, json={}, request=request)
+        if path == "/ws/api.dll":
+            assert headers["X-EBAY-API-IAF-TOKEN"] == "seller-user-token"
+            return httpx.Response(200, content=trading_payload, request=request)
+        raise AssertionError(f"Unexpected eBay request: {method} {path}")
+
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token="seller-user-token",
+        ebay_client_id="client-id",
+        ebay_client_secret="client-secret",
+        ebay_refresh_token=None,
+        ebay_oauth_scopes="https://api.ebay.com/oauth/api_scope",
+        ebay_marketplace_id="EBAY_US",
+        ebay_seller_username="exactspec-electronics",
+        ebay_browse_search_query=" ",
+        ebay_expand_item_groups=False,
+        ebay_use_access_token_for_trading=True,
+        ebay_trading_compatibility_level="1455",
+    )
+
+    items = asyncio.run(EbayClient(settings).fetch_inventory_items())
+
+    assert [item.sku for item in items] == ["PHONE-1"]
+    assert items[0].source == "ebay-trading-api"
+    assert items[0].item_specifics["UPC"] == "887276900123"
+    assert items[0].item_specifics["Shipping Weight"] == "1 lb"
+
+
 def test_ebay_client_renews_application_token_once_after_browse_401(monkeypatch):
     token_calls = 0
     browse_authorizations = []
