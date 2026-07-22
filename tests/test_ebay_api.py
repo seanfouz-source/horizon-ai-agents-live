@@ -133,6 +133,109 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_primary_image(monkeypa
     assert items[0].item_specifics["Shipping"] == "Free Shipping"
 
 
+def test_ebay_browse_api_expands_item_group_and_recovers_catalog_gtins(monkeypatch):
+    def handler(path, params):
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/inventory_item":
+            return httpx.Response(200, json={"inventoryItems": [], "total": 0}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            return httpx.Response(
+                200,
+                json={
+                    "itemSummaries": [
+                        {
+                            "itemId": "v1|123456789012|0",
+                            "legacyItemId": "123456789012",
+                            "title": "Apple iPhone 16 - Various Colors",
+                        }
+                    ],
+                    "total": 1,
+                },
+                request=request,
+            )
+        if path == "/buy/browse/v1/item/v1|123456789012|0":
+            assert params["fieldgroups"] == "PRODUCT"
+            return httpx.Response(
+                200,
+                json={
+                    "itemId": "v1|123456789012|0",
+                    "legacyItemId": "123456789012",
+                    "title": "Apple iPhone 16 - Various Colors",
+                    "primaryItemGroup": {"itemGroupId": "123456789012"},
+                },
+                request=request,
+            )
+        if path == "/buy/browse/v1/item/get_items_by_item_group":
+            assert params == {"item_group_id": "123456789012", "fieldgroups": "PRODUCT"}
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "itemId": "v1|123456789012|111",
+                            "legacyItemId": "123456789012",
+                            "title": "Apple iPhone 16 Blue 128 GB",
+                            "condition": "Open box",
+                            "price": {"value": "599.00", "currency": "USD"},
+                            "image": {"imageUrl": "https://i.ebayimg.com/images/g/blue/s-l1600.jpg"},
+                            "localizedAspects": [
+                                {"name": "Color", "value": "Blue"},
+                                {"name": "Storage Capacity", "value": "128 GB"},
+                            ],
+                            "product": {"gtins": ["0195949820093"], "brand": "Apple"},
+                            "estimatedAvailabilities": [
+                                {
+                                    "estimatedAvailabilityStatus": "IN_STOCK",
+                                    "estimatedRemainingQuantity": 2,
+                                }
+                            ],
+                        },
+                        {
+                            "itemId": "v1|123456789012|222",
+                            "legacyItemId": "123456789012",
+                            "title": "Apple iPhone 16 Black 256 GB",
+                            "condition": "Open box",
+                            "price": {"value": "699.00", "currency": "USD"},
+                            "image": {"imageUrl": "https://i.ebayimg.com/images/g/black/s-l1600.jpg"},
+                            "localizedAspects": [
+                                {"name": "Color", "value": "Black"},
+                                {"name": "Storage Capacity", "value": "256 GB"},
+                            ],
+                            "product": {"gtins": ["0195949820109"], "brand": "Apple"},
+                            "estimatedAvailabilities": [
+                                {
+                                    "estimatedAvailabilityStatus": "IN_STOCK",
+                                    "estimatedRemainingQuantity": 1,
+                                }
+                            ],
+                        },
+                    ]
+                },
+                request=request,
+            )
+        raise AssertionError(f"Unexpected eBay path: {path}")
+
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token="application-token",
+        ebay_marketplace_id="EBAY_US",
+        ebay_seller_username="exactspec-electronics",
+        ebay_browse_search_query=" ",
+    )
+
+    items = asyncio.run(EbayClient(settings).fetch_inventory_items())
+
+    assert len(items) == 2
+    assert items[0].sku != items[1].sku
+    assert all(item.sku.startswith("EBAY-123456789012-") for item in items)
+    assert [item.quantity for item in items] == [2, 1]
+    assert [item.item_specifics["GTIN"] for item in items] == [
+        "0195949820093",
+        "0195949820109",
+    ]
+    assert all(item.item_specifics["Brand"] == "Apple" for item in items)
+
+
 def test_ebay_trading_parser_expands_variations_with_upcs_and_shipping_weight():
     payload = b"""<?xml version="1.0" encoding="utf-8"?>
     <GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">

@@ -102,6 +102,7 @@ class EbayClient:
     async def _fetch_browse_seller_items(self, seller_username: str, limit: int = 200) -> list[InventoryItem]:
         items: list[InventoryItem] = []
         seen_item_ids: set[str] = set()
+        seen_skus: set[str] = set()
         offset = 0
         page_size = max(1, min(limit, 200))
         query = getattr(self.settings, "ebay_browse_search_query", None)
@@ -142,11 +143,27 @@ class EbayClient:
                             exc,
                         )
                         continue
-                    item = self._normalize_browse_item({**summary, **detail})
-                    if self._is_active_available_listing(item):
-                        items.append(item)
-                    else:
-                        self._log_skipped_listing(item, self._listing_skip_reason(item))
+                    combined = {**summary, **detail}
+                    try:
+                        group_rows = await self._fetch_browse_item_group(client, combined)
+                    except httpx.HTTPError as exc:
+                        logger.warning(
+                            "Could not expand eBay Browse item group %s; using parent data: %s",
+                            item_id,
+                            exc,
+                        )
+                        group_rows = []
+                    for raw_item in group_rows or [combined]:
+                        item = self._normalize_browse_item(raw_item)
+                        if item.sku in seen_skus:
+                            continue
+                        seen_skus.add(item.sku)
+                        if self._is_active_available_listing(item):
+                            items.append(item)
+                        else:
+                            self._log_skipped_listing(item, self._listing_skip_reason(item))
+                        if len(items) >= limit:
+                            break
                     if len(items) >= limit:
                         break
 
@@ -160,6 +177,7 @@ class EbayClient:
         response = await self._get(
             client,
             f"/buy/browse/v1/item/{item_id}",
+            params={"fieldgroups": "PRODUCT"},
             headers=self._headers(),
         )
         if response.status_code == 404:
@@ -167,6 +185,56 @@ class EbayClient:
         response.raise_for_status()
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
+
+    async def _fetch_browse_item_group(
+        self,
+        client: httpx.AsyncClient,
+        raw_item: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        primary_group = raw_item.get("primaryItemGroup")
+        group_id: object = None
+        if isinstance(primary_group, dict):
+            group_id = primary_group.get("itemGroupId")
+        group_id = group_id or raw_item.get("itemGroupId")
+        if not group_id:
+            return []
+
+        response = await self._get(
+            client,
+            "/buy/browse/v1/item/get_items_by_item_group",
+            params={"item_group_id": str(group_id), "fieldgroups": "PRODUCT"},
+            headers=self._headers(),
+        )
+        if response.status_code in {400, 404}:
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return []
+        raw_group_items = payload.get("items")
+        if not isinstance(raw_group_items, list):
+            return []
+
+        descriptions: dict[str, str] = {}
+        for description_group in payload.get("commonDescriptions") or []:
+            if not isinstance(description_group, dict):
+                continue
+            description = description_group.get("description")
+            if not isinstance(description, str):
+                continue
+            for grouped_item_id in description_group.get("itemIds") or []:
+                descriptions[str(grouped_item_id)] = description
+
+        results: list[dict[str, Any]] = []
+        for group_item in raw_group_items:
+            if not isinstance(group_item, dict):
+                continue
+            item_id = str(group_item.get("itemId") or "")
+            merged = {**raw_item, **group_item, "_browse_group_variant": True}
+            if not merged.get("description") and item_id in descriptions:
+                merged["description"] = descriptions[item_id]
+            results.append(merged)
+        return results
 
     async def _enrich_with_trading_api(self, browse_items: list[InventoryItem]) -> list[InventoryItem]:
         enriched: list[InventoryItem] = []
@@ -701,6 +769,7 @@ class EbayClient:
 
     def _normalize_browse_item(self, raw_item: dict[str, Any]) -> InventoryItem:
         legacy_item_id = self._legacy_item_id(raw_item)
+        restful_item_id = str(raw_item.get("itemId") or "")
         image_urls = self._image_urls_from_browse_item(raw_item)
         price = raw_item.get("price") or {}
         availability = self._browse_availability(raw_item)
@@ -709,7 +778,11 @@ class EbayClient:
         short_description = self._short_description(raw_item)
 
         return InventoryItem(
-            sku=f"EBAY-{legacy_item_id}" if legacy_item_id else str(raw_item.get("itemId") or ""),
+            sku=(
+                self._generated_browse_variation_sku(legacy_item_id or restful_item_id, restful_item_id)
+                if raw_item.get("_browse_group_variant")
+                else f"EBAY-{legacy_item_id}" if legacy_item_id else restful_item_id
+            ),
             title=str(raw_item.get("title") or f"eBay listing {legacy_item_id}"),
             description=short_description,
             condition=raw_item.get("condition"),
@@ -847,8 +920,29 @@ class EbayClient:
                         item_specifics[label] = clean_values[0]
                 else:
                     item_specifics[label] = str(value)
+        product = raw_item.get("product")
+        if isinstance(product, dict):
+            gtins = product.get("gtins")
+            if isinstance(gtins, list):
+                clean_gtins = [str(value).strip() for value in gtins if str(value).strip()]
+                if clean_gtins:
+                    item_specifics["GTIN"] = clean_gtins[0]
+            mpns = product.get("mpns")
+            if isinstance(mpns, list):
+                clean_mpns = [str(value).strip() for value in mpns if str(value).strip()]
+                if clean_mpns:
+                    item_specifics["MPN"] = clean_mpns[0]
+            brand = product.get("brand")
+            if brand:
+                item_specifics["Brand"] = str(brand).strip()
         item_specifics.update(EbayClient._browse_shipping_specifics(raw_item))
         return item_specifics
+
+    @staticmethod
+    def _generated_browse_variation_sku(legacy_item_id: str, restful_item_id: str) -> str:
+        suffix = hashlib.sha256(restful_item_id.encode("utf-8")).hexdigest()[:10]
+        base = re.sub(r"[^A-Za-z0-9._-]+", "-", f"EBAY-{legacy_item_id}").strip("-.")
+        return f"{base[:39]}-{suffix}"
 
     @staticmethod
     def _sell_product_identifiers(product: dict[str, Any]) -> dict[str, str]:

@@ -197,12 +197,13 @@ Trading API schema version used by this project.
 
 The service tries the eBay Sell Inventory API first, then falls back to the eBay
 Buy Browse API seller search/details endpoint when Seller Hub listings are not
-represented as Sell Inventory records. When an eBay refresh token is configured,
-the importer then calls Trading API `GetItem` as the listing owner. That final
-step expands multi-variation listings into separate seller SKU rows and recovers
-variation-level UPC/EAN/ISBN values, exact available quantity, item specifics,
-variation images, and packaged weight when those values are saved on eBay. It
-stores active, available SKU rows only.
+represented as Sell Inventory records. Browse item groups are expanded into
+separate, stable SKU rows and catalog GTINs are requested for each purchasable
+variation. When an eBay refresh token is configured, the importer additionally
+calls Trading API `GetItem` as the listing owner. That owner-only step recovers
+the original seller SKUs, variation-level UPC/EAN/ISBN values, exact available
+quantity, item specifics, variation images, and packaged weight when those values
+are saved on eBay. It stores active, available SKU rows only.
 
 By default, social draft endpoints refresh inventory before generating Metricool
 payloads (`SYNC_INVENTORY_BEFORE_SOCIAL_POSTS=true`). This lets newly changed
