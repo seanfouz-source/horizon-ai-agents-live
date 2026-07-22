@@ -221,6 +221,7 @@ def test_ebay_browse_api_expands_item_group_and_recovers_catalog_gtins(monkeypat
         ebay_marketplace_id="EBAY_US",
         ebay_seller_username="exactspec-electronics",
         ebay_browse_search_query=" ",
+        ebay_expand_item_groups=True,
     )
 
     items = asyncio.run(EbayClient(settings).fetch_inventory_items())

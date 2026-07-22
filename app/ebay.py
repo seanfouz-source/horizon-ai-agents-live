@@ -191,11 +191,14 @@ class EbayClient:
         client: httpx.AsyncClient,
         raw_item: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        if not bool(getattr(self.settings, "ebay_expand_item_groups", False)):
+            return []
         primary_group = raw_item.get("primaryItemGroup")
         group_id: object = None
         if isinstance(primary_group, dict):
             group_id = primary_group.get("itemGroupId")
         group_id = group_id or raw_item.get("itemGroupId")
+        group_id = group_id or self._legacy_item_id(raw_item)
         if not group_id:
             return []
 
@@ -234,6 +237,12 @@ class EbayClient:
             if not merged.get("description") and item_id in descriptions:
                 merged["description"] = descriptions[item_id]
             results.append(merged)
+        if results:
+            logger.info(
+                "Expanded eBay Browse item group %s into %s purchasable variations.",
+                group_id,
+                len(results),
+            )
         return results
 
     async def _enrich_with_trading_api(self, browse_items: list[InventoryItem]) -> list[InventoryItem]:
