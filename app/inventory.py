@@ -156,15 +156,10 @@ class InventoryRepository:
     def replace_ebay_inventory_snapshot(self, items: Iterable[InventoryItem]) -> int:
         current_items = list(items)
         count = self.upsert_items(current_items)
-        active_item_ids = {
-            item.ebay_item_id
-            for item in current_items
-            if item.ebay_item_id
-        }
         active_skus = {item.sku for item in current_items if item.sku}
 
         with self.connect() as connection:
-            if active_item_ids or active_skus:
+            if active_skus:
                 connection.execute(
                     """
                     UPDATE inventory_items
@@ -175,19 +170,12 @@ class InventoryRepository:
                         sku LIKE 'EBAY-%'
                         OR source LIKE 'ebay-%'
                     )
-                    AND (
-                        ebay_item_id IS NULL
-                        OR ebay_item_id = ''
-                        OR ebay_item_id NOT IN ({item_placeholders})
-                    )
                     AND sku NOT IN ({sku_placeholders})
                     """.format(
-                        item_placeholders=", ".join("?" for _ in active_item_ids) or "''",
                         sku_placeholders=", ".join("?" for _ in active_skus) or "''",
                     ),
                     (
                         datetime.now(timezone.utc).isoformat(),
-                        *sorted(active_item_ids),
                         *sorted(active_skus),
                     ),
                 )

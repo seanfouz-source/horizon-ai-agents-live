@@ -189,15 +189,20 @@ client credentials. eBay access tokens are short-lived, so production should set
 Application access token before inventory syncs that use the public Browse API
 fallback. If you also set `EBAY_REFRESH_TOKEN`, the app will prefer that user
 refresh-token flow before each inventory sync. `EBAY_OAUTH_SCOPES` defaults to
-`https://api.ebay.com/oauth/api_scope`, which is enough for the public Browse API
-fallback. Add eBay Sell Inventory scopes there only if the refresh token was
-authorized for them.
+`https://api.ebay.com/oauth/api_scope`. eBay's traditional Trading API does not
+use OAuth scopes, but it does require the user access token created from the
+refresh token. Add eBay Sell Inventory scopes only if that refresh token was
+authorized for them. `EBAY_TRADING_COMPATIBILITY_LEVEL` defaults to the current
+Trading API schema version used by this project.
 
 The service tries the eBay Sell Inventory API first, then falls back to the eBay
 Buy Browse API seller search/details endpoint when Seller Hub listings are not
-represented as Sell Inventory records. It stores active, available listings
-only: item ID, title, URL, price, condition, quantity, category, listing status,
-best image URL, all returned image URLs, short description, and item specifics.
+represented as Sell Inventory records. When an eBay refresh token is configured,
+the importer then calls Trading API `GetItem` as the listing owner. That final
+step expands multi-variation listings into separate seller SKU rows and recovers
+variation-level UPC/EAN/ISBN values, exact available quantity, item specifics,
+variation images, and packaged weight when those values are saved on eBay. It
+stores active, available SKU rows only.
 
 By default, social draft endpoints refresh inventory before generating Metricool
 payloads (`SYNC_INVENTORY_BEFORE_SOCIAL_POSTS=true`). This lets newly changed

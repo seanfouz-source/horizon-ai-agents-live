@@ -5,6 +5,7 @@ import httpx
 
 import app.ebay as ebay_module
 from app.ebay import EbayClient
+from app.models import InventoryItem
 
 
 def test_ebay_client_preserves_walmart_identifiers_and_package_weight():
@@ -40,8 +41,9 @@ class FakeAsyncClient:
     async def get(self, path, params=None, headers=None):
         return self._call_handler(path, params or {}, headers or {}, "GET")
 
-    async def post(self, path, data=None, headers=None):
-        return self._call_handler(path, data or {}, headers or {}, "POST")
+    async def post(self, path, data=None, content=None, headers=None):
+        payload = content if content is not None else data or {}
+        return self._call_handler(path, payload, headers or {}, "POST")
 
     def _call_handler(self, path, payload, headers, method):
         arg_count = getattr(getattr(self.handler, "__code__", None), "co_argcount", 2)
@@ -129,6 +131,150 @@ def test_ebay_client_falls_back_to_browse_api_and_selects_primary_image(monkeypa
     ]
     assert items[0].item_specifics["Storage Capacity"] == "128 GB"
     assert items[0].item_specifics["Shipping"] == "Free Shipping"
+
+
+def test_ebay_trading_parser_expands_variations_with_upcs_and_shipping_weight():
+    payload = b"""<?xml version="1.0" encoding="utf-8"?>
+    <GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+      <Ack>Success</Ack>
+      <Item>
+        <ItemID>123456789012</ItemID>
+        <Title>Samsung Galaxy S25</Title>
+        <Description><![CDATA[<p>Open box phone.</p>]]></Description>
+        <ConditionID>1500</ConditionID>
+        <ConditionDisplayName>Open box</ConditionDisplayName>
+        <PrimaryCategory><CategoryID>9355</CategoryID><CategoryName>Cell Phones</CategoryName></PrimaryCategory>
+        <PictureDetails><PictureURL>https://i.ebayimg.com/images/g/base/s-l1600.jpg</PictureURL></PictureDetails>
+        <ShippingPackageDetails>
+          <WeightMajor unit="lbs">1</WeightMajor>
+          <WeightMinor unit="oz">8</WeightMinor>
+        </ShippingPackageDetails>
+        <ItemSpecifics>
+          <NameValueList><Name>Brand</Name><Value>Samsung</Value></NameValueList>
+        </ItemSpecifics>
+        <SellingStatus>
+          <ListingStatus>Active</ListingStatus>
+          <CurrentPrice currencyID="USD">525.00</CurrentPrice>
+        </SellingStatus>
+        <Variations>
+          <Pictures>
+            <VariationSpecificName>Color</VariationSpecificName>
+            <VariationSpecificPictureSet>
+              <VariationSpecificValue>Blue</VariationSpecificValue>
+              <PictureURL>https://i.ebayimg.com/images/g/blue/s-l1600.jpg</PictureURL>
+            </VariationSpecificPictureSet>
+          </Pictures>
+          <Variation>
+            <SKU>S25-BLUE-128</SKU>
+            <StartPrice currencyID="USD">520.00</StartPrice>
+            <Quantity>3</Quantity>
+            <SellingStatus><QuantitySold>1</QuantitySold></SellingStatus>
+            <VariationSpecifics>
+              <NameValueList><Name>Color</Name><Value>Blue</Value></NameValueList>
+              <NameValueList><Name>Storage Capacity</Name><Value>128 GB</Value></NameValueList>
+            </VariationSpecifics>
+            <VariationProductListingDetails><UPC>887276900123</UPC></VariationProductListingDetails>
+          </Variation>
+          <Variation>
+            <StartPrice currencyID="USD">540.00</StartPrice>
+            <Quantity>1</Quantity>
+            <SellingStatus><QuantitySold>0</QuantitySold></SellingStatus>
+            <VariationSpecifics>
+              <NameValueList><Name>Color</Name><Value>Black</Value></NameValueList>
+              <NameValueList><Name>Storage Capacity</Name><Value>256 GB</Value></NameValueList>
+            </VariationSpecifics>
+            <VariationProductListingDetails><UPC>887276900130</UPC></VariationProductListingDetails>
+          </Variation>
+        </Variations>
+      </Item>
+    </GetItemResponse>"""
+    settings = SimpleNamespace(
+        ebay_access_token="seller-token",
+        ebay_marketplace_id="EBAY_US",
+    )
+    browse_item = InventoryItem(
+        sku="EBAY-123456789012",
+        title="Samsung Galaxy S25",
+        condition="Open box",
+        quantity=3,
+        ebay_item_id="123456789012",
+        ebay_url="https://www.ebay.com/itm/123456789012",
+        image_url="https://i.ebayimg.com/images/g/base/s-l1600.jpg",
+        image_urls=["https://i.ebayimg.com/images/g/base/s-l1600.jpg"],
+        listing_status="IN_STOCK",
+        source="ebay-browse-api",
+    )
+
+    items = EbayClient(settings)._parse_trading_get_item(payload, browse_item)
+
+    assert len(items) == 2
+    assert items[0].sku == "S25-BLUE-128"
+    assert items[0].quantity == 2
+    assert items[0].price == 520.0
+    assert items[0].item_specifics["UPC"] == "887276900123"
+    assert items[0].item_specifics["Shipping Weight"] == "1.5 lb"
+    assert items[0].item_specifics["Brand"] == "Samsung"
+    assert items[0].image_url == "https://i.ebayimg.com/images/g/blue/s-l1600.jpg"
+    assert items[0].source == "ebay-trading-api"
+    assert items[1].quantity == 1
+    assert items[1].item_specifics["UPC"] == "887276900130"
+    assert items[1].sku.startswith("EBAY-123456789012-")
+    assert len(items[1].sku) <= 50
+
+
+def test_ebay_trading_enrichment_uses_refreshed_seller_token(monkeypatch):
+    payload = b"""<?xml version="1.0" encoding="utf-8"?>
+    <GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+      <Ack>Success</Ack>
+      <Item>
+        <ItemID>123456789012</ItemID><SKU>PHONE-1</SKU><Title>Phone</Title>
+        <ConditionDisplayName>Open box</ConditionDisplayName><Quantity>2</Quantity>
+        <PictureDetails><PictureURL>https://i.ebayimg.com/images/g/demo/s-l1600.jpg</PictureURL></PictureDetails>
+        <ProductListingDetails><UPC>887276900123</UPC></ProductListingDetails>
+        <SellingStatus><ListingStatus>Active</ListingStatus><QuantitySold>1</QuantitySold>
+          <CurrentPrice currencyID="USD">500.00</CurrentPrice></SellingStatus>
+      </Item>
+    </GetItemResponse>"""
+
+    def handler(path, request_payload, headers, method):
+        request = httpx.Request(method, f"https://api.ebay.com{path}")
+        if path == "/identity/v1/oauth2/token":
+            assert request_payload["grant_type"] == "refresh_token"
+            return httpx.Response(200, json={"access_token": "fresh-seller-token"}, request=request)
+        if path == "/ws/api.dll":
+            assert headers["X-EBAY-API-IAF-TOKEN"] == "fresh-seller-token"
+            assert headers["X-EBAY-API-CALL-NAME"] == "GetItem"
+            assert b"<ItemID>123456789012</ItemID>" in request_payload
+            return httpx.Response(200, content=payload, request=request)
+        raise AssertionError(f"Unexpected eBay request: {method} {path}")
+
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient(handler))
+    settings = SimpleNamespace(
+        ebay_access_token=None,
+        ebay_client_id="client-id",
+        ebay_client_secret="client-secret",
+        ebay_refresh_token="refresh-token",
+        ebay_oauth_scopes="https://api.ebay.com/oauth/api_scope",
+        ebay_marketplace_id="EBAY_US",
+        ebay_trading_compatibility_level="1455",
+    )
+    browse_item = InventoryItem(
+        sku="EBAY-123456789012",
+        title="Phone",
+        condition="Open box",
+        quantity=1,
+        ebay_item_id="123456789012",
+        image_url="https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
+        image_urls=["https://i.ebayimg.com/images/g/demo/s-l1600.jpg"],
+        listing_status="IN_STOCK",
+        source="ebay-browse-api",
+    )
+
+    items = asyncio.run(EbayClient(settings)._enrich_with_trading_api([browse_item]))
+
+    assert [item.sku for item in items] == ["PHONE-1"]
+    assert items[0].quantity == 1
+    assert items[0].item_specifics["UPC"] == "887276900123"
 
 
 def test_ebay_client_retries_temporary_browse_api_failures(monkeypatch):

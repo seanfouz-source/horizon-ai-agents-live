@@ -100,6 +100,45 @@ def test_replace_ebay_inventory_snapshot_marks_missing_ebay_rows_inactive(tmp_pa
     assert demo_item.quantity == 2
 
 
+def test_replace_ebay_snapshot_retires_parent_row_when_listing_expands_to_variations(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    repository.upsert_items(
+        [
+            InventoryItem(
+                sku="EBAY-123",
+                ebay_item_id="123",
+                title="Phone - all colors",
+                quantity=3,
+                image_url="https://example.com/parent.jpg",
+                source="ebay-browse-api",
+                listing_status="IN_STOCK",
+            )
+        ]
+    )
+
+    repository.replace_ebay_inventory_snapshot(
+        [
+            InventoryItem(
+                sku="PHONE-BLUE",
+                ebay_item_id="123",
+                title="Phone - Blue",
+                quantity=1,
+                image_url="https://example.com/blue.jpg",
+                source="ebay-trading-api",
+                listing_status="ACTIVE",
+            )
+        ]
+    )
+
+    parent = repository.get("EBAY-123")
+    variation = repository.get("PHONE-BLUE")
+    assert parent is not None
+    assert parent.quantity == 0
+    assert parent.listing_status == "ENDED"
+    assert variation is not None
+    assert variation.quantity == 1
+
+
 def test_item_for_social_reference_resolves_post_history_to_listing(tmp_path):
     repository = InventoryRepository(tmp_path / "inventory.db")
     repository.upsert_items(

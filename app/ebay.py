@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import logging
 import re
+import xml.etree.ElementTree as ET
 from base64 import b64encode
 from datetime import datetime, timezone
 from typing import Any
@@ -45,6 +47,21 @@ class EbayClient:
         browse_items = await self._fetch_browse_seller_items(seller_username, limit=limit)
         if browse_items:
             logger.info("Imported %s active eBay listings through Browse API.", len(browse_items))
+        if browse_items and self._has_refresh_credentials():
+            try:
+                trading_items = await self._enrich_with_trading_api(browse_items)
+            except (httpx.HTTPError, RuntimeError) as exc:
+                logger.warning(
+                    "eBay Trading API enrichment could not start; using Browse data: %s",
+                    exc,
+                )
+            else:
+                logger.info(
+                    "Expanded %s eBay listings into %s active seller SKU rows through Trading API.",
+                    len(browse_items),
+                    len(trading_items),
+                )
+                return trading_items
         return browse_items
 
     async def _fetch_sell_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
@@ -150,6 +167,380 @@ class EbayClient:
         response.raise_for_status()
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
+
+    async def _enrich_with_trading_api(self, browse_items: list[InventoryItem]) -> list[InventoryItem]:
+        enriched: list[InventoryItem] = []
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            await self._ensure_access_token(client)
+            for browse_item in browse_items:
+                if not browse_item.ebay_item_id:
+                    enriched.append(browse_item)
+                    continue
+                try:
+                    response = await self._post_content(
+                        client,
+                        "/ws/api.dll",
+                        content=self._trading_get_item_request(browse_item.ebay_item_id),
+                        headers=self._trading_headers(),
+                    )
+                    response.raise_for_status()
+                    trading_items = self._parse_trading_get_item(response.content, browse_item)
+                except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
+                    logger.warning(
+                        "Could not enrich eBay listing %s through Trading API; using Browse data: %s",
+                        browse_item.ebay_item_id,
+                        exc,
+                    )
+                    enriched.append(browse_item)
+                    continue
+
+                active_items = [item for item in trading_items if self._is_active_available_listing(item)]
+                if active_items:
+                    enriched.extend(active_items)
+                else:
+                    self._log_skipped_listing(
+                        browse_item,
+                        "Trading API returned no active variation with available quantity",
+                    )
+        return enriched
+
+    def _trading_headers(self) -> dict[str, str]:
+        compatibility_level = str(
+            getattr(self.settings, "ebay_trading_compatibility_level", "1455") or "1455"
+        ).strip()
+        return {
+            "Content-Type": "text/xml;charset=UTF-8",
+            "X-EBAY-API-IAF-TOKEN": str(self._access_token or ""),
+            "X-EBAY-API-CALL-NAME": "GetItem",
+            "X-EBAY-API-SITEID": "0",
+            "X-EBAY-API-COMPATIBILITY-LEVEL": compatibility_level,
+        }
+
+    @staticmethod
+    def _trading_get_item_request(item_id: str) -> bytes:
+        root = ET.Element("GetItemRequest", xmlns="urn:ebay:apis:eBLBaseComponents")
+        ET.SubElement(root, "ItemID").text = str(item_id)
+        ET.SubElement(root, "DetailLevel").text = "ReturnAll"
+        ET.SubElement(root, "IncludeItemSpecifics").text = "true"
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def _parse_trading_get_item(
+        self,
+        payload: bytes | str,
+        browse_item: InventoryItem,
+    ) -> list[InventoryItem]:
+        root = ET.fromstring(payload)
+        ack = self._xml_text(root, "Ack") or "Failure"
+        if ack not in {"Success", "Warning"}:
+            messages = [
+                self._xml_text(error, "LongMessage") or self._xml_text(error, "ShortMessage")
+                for error in self._xml_children(root, "Errors")
+            ]
+            clean_messages = [message for message in messages if message]
+            raise ValueError("; ".join(clean_messages) or f"eBay Trading API returned {ack}.")
+
+        item_node = self._xml_child(root, "Item")
+        if item_node is None:
+            raise ValueError("eBay Trading API response did not include an Item.")
+
+        item_id = self._xml_text(item_node, "ItemID") or browse_item.ebay_item_id
+        title = self._xml_text(item_node, "Title") or browse_item.title
+        description = (
+            self._clean_xml_description(self._xml_text(item_node, "Description"))
+            or browse_item.description
+        )
+        condition = self._xml_text(item_node, "ConditionDisplayName") or browse_item.condition
+        listing_status = (
+            self._xml_nested_text(item_node, "SellingStatus", "ListingStatus")
+            or browse_item.listing_status
+            or "ACTIVE"
+        ).upper()
+        category = (
+            self._xml_nested_text(item_node, "PrimaryCategory", "CategoryName")
+            or browse_item.category
+        )
+        parent_specifics = self._xml_name_values(self._xml_child(item_node, "ItemSpecifics"))
+        category_id = self._xml_nested_text(item_node, "PrimaryCategory", "CategoryID")
+        condition_id = self._xml_text(item_node, "ConditionID")
+        if category_id:
+            parent_specifics["categoryId"] = category_id
+        if condition_id:
+            parent_specifics["conditionId"] = condition_id
+        parent_specifics.update(
+            self._xml_product_identifiers(self._xml_child(item_node, "ProductListingDetails"))
+        )
+        shipping_weight = self._xml_shipping_weight(item_node)
+        if shipping_weight:
+            parent_specifics["Shipping Weight"] = shipping_weight
+
+        parent_images = self._dedupe_urls(
+            [
+                value
+                for value in self._xml_child_texts(
+                    self._xml_child(item_node, "PictureDetails"),
+                    "PictureURL",
+                )
+                if value
+            ]
+            + browse_item.image_urls
+        )
+        item_price_node = self._xml_nested_child(item_node, "SellingStatus", "CurrentPrice")
+        if item_price_node is None:
+            item_price_node = self._xml_child(item_node, "StartPrice")
+        item_price = self._float_value(item_price_node.text if item_price_node is not None else None)
+        item_currency = (
+            item_price_node.attrib.get("currencyID") if item_price_node is not None else None
+        ) or browse_item.currency
+        variations_node = self._xml_child(item_node, "Variations")
+        variation_nodes = self._xml_children(variations_node, "Variation")
+        if variation_nodes:
+            picture_map = self._xml_variation_picture_map(variations_node)
+            results: list[InventoryItem] = []
+            for index, variation in enumerate(variation_nodes, start=1):
+                variation_specifics = self._xml_name_values(
+                    self._xml_child(variation, "VariationSpecifics")
+                )
+                specifics = dict(parent_specifics)
+                specifics.update(variation_specifics)
+                for identifier_name in list(specifics):
+                    normalized_name = re.sub(r"[^a-z0-9]", "", identifier_name.lower())
+                    if normalized_name in {"gtin", "upc", "ean", "isbn"}:
+                        specifics.pop(identifier_name, None)
+                specifics.update(
+                    self._xml_product_identifiers(
+                        self._xml_child(variation, "VariationProductListingDetails")
+                    )
+                )
+                variation_sku = self._xml_text(variation, "SKU") or self._generated_variation_sku(
+                    item_id or browse_item.ebay_item_id or browse_item.sku,
+                    variation_specifics,
+                    index,
+                )
+                total_quantity = self._int_value(self._xml_text(variation, "Quantity"))
+                sold_quantity = self._int_value(
+                    self._xml_nested_text(variation, "SellingStatus", "QuantitySold")
+                )
+                price_node = self._xml_child(variation, "StartPrice")
+                price = self._float_value(price_node.text if price_node is not None else None)
+                currency = (
+                    price_node.attrib.get("currencyID") if price_node is not None else None
+                ) or item_currency
+                matched_images = self._variation_images(variation_specifics, picture_map)
+                image_urls = self._dedupe_urls(matched_images + parent_images)
+                variation_label = " / ".join(variation_specifics.values())
+                variation_title = f"{title} - {variation_label}" if variation_label else title
+                results.append(
+                    InventoryItem(
+                        sku=variation_sku,
+                        title=variation_title,
+                        description=description,
+                        condition=condition,
+                        price=price if price is not None else item_price or browse_item.price,
+                        currency=currency,
+                        quantity=max(0, total_quantity - sold_quantity),
+                        ebay_item_id=item_id,
+                        ebay_url=browse_item.ebay_url
+                        or (f"https://www.ebay.com/itm/{item_id}" if item_id else None),
+                        image_url=self._primary_image_url(matched_images)
+                        or self._primary_image_url(parent_images),
+                        image_urls=image_urls,
+                        category=category,
+                        listing_status=listing_status,
+                        item_specifics=specifics,
+                        source="ebay-trading-api",
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+            return results
+
+        total_quantity = self._int_value(self._xml_text(item_node, "Quantity"))
+        sold_quantity = self._int_value(
+            self._xml_nested_text(item_node, "SellingStatus", "QuantitySold")
+        )
+        item_sku = self._xml_text(item_node, "SKU") or browse_item.sku
+        return [
+            InventoryItem(
+                sku=item_sku,
+                title=title,
+                description=description,
+                condition=condition,
+                price=item_price if item_price is not None else browse_item.price,
+                currency=item_currency,
+                quantity=max(0, total_quantity - sold_quantity),
+                ebay_item_id=item_id,
+                ebay_url=browse_item.ebay_url
+                or (f"https://www.ebay.com/itm/{item_id}" if item_id else None),
+                image_url=self._primary_image_url(parent_images) or browse_item.image_url,
+                image_urls=parent_images,
+                category=category,
+                listing_status=listing_status,
+                item_specifics=parent_specifics,
+                source="ebay-trading-api",
+                updated_at=datetime.now(timezone.utc),
+            )
+        ]
+
+    @staticmethod
+    def _xml_child(node: ET.Element | None, name: str) -> ET.Element | None:
+        if node is None:
+            return None
+        for child in node:
+            if str(child.tag).rsplit("}", 1)[-1] == name:
+                return child
+        return None
+
+    @staticmethod
+    def _xml_children(node: ET.Element | None, name: str) -> list[ET.Element]:
+        if node is None:
+            return []
+        return [
+            child
+            for child in node
+            if str(child.tag).rsplit("}", 1)[-1] == name
+        ]
+
+    @classmethod
+    def _xml_nested_child(cls, node: ET.Element | None, *names: str) -> ET.Element | None:
+        current = node
+        for name in names:
+            current = cls._xml_child(current, name)
+            if current is None:
+                return None
+        return current
+
+    @classmethod
+    def _xml_text(cls, node: ET.Element | None, name: str) -> str | None:
+        child = cls._xml_child(node, name)
+        if child is None or child.text is None:
+            return None
+        value = child.text.strip()
+        return value or None
+
+    @classmethod
+    def _xml_nested_text(cls, node: ET.Element | None, *names: str) -> str | None:
+        child = cls._xml_nested_child(node, *names)
+        if child is None or child.text is None:
+            return None
+        value = child.text.strip()
+        return value or None
+
+    @classmethod
+    def _xml_child_texts(cls, node: ET.Element | None, name: str) -> list[str]:
+        return [
+            child.text.strip()
+            for child in cls._xml_children(node, name)
+            if child.text and child.text.strip()
+        ]
+
+    @classmethod
+    def _xml_name_values(cls, container: ET.Element | None) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for pair in cls._xml_children(container, "NameValueList"):
+            name = cls._xml_text(pair, "Name")
+            pair_values = cls._xml_child_texts(pair, "Value")
+            if name and pair_values:
+                values[name] = ", ".join(pair_values)
+        return values
+
+    @classmethod
+    def _xml_product_identifiers(cls, container: ET.Element | None) -> dict[str, str]:
+        identifiers: dict[str, str] = {}
+        for name in ("GTIN", "UPC", "EAN", "ISBN"):
+            value = cls._xml_text(container, name)
+            if value:
+                identifiers[name] = value
+        return identifiers
+
+    @classmethod
+    def _xml_shipping_weight(cls, item_node: ET.Element) -> str | None:
+        package = cls._xml_child(item_node, "ShippingPackageDetails")
+        weight_lbs = 0.0
+        found = False
+        for name in ("WeightMajor", "WeightMinor"):
+            measure = cls._xml_child(package, name)
+            if measure is None or measure.text is None:
+                continue
+            try:
+                amount = float(measure.text.strip())
+            except (TypeError, ValueError):
+                continue
+            unit = str(measure.attrib.get("unit") or "lb").strip().lower()
+            factors = {
+                "lb": 1.0,
+                "lbs": 1.0,
+                "pound": 1.0,
+                "oz": 1 / 16,
+                "ounce": 1 / 16,
+                "kg": 2.2046226218,
+                "kilogram": 2.2046226218,
+                "g": 0.0022046226218,
+                "gr": 0.0022046226218,
+                "gram": 0.0022046226218,
+            }
+            factor = factors.get(unit)
+            if factor is None:
+                continue
+            weight_lbs += amount * factor
+            found = True
+        if not found or weight_lbs <= 0:
+            return None
+        formatted = f"{weight_lbs:.3f}".rstrip("0").rstrip(".")
+        return f"{formatted} lb"
+
+    @classmethod
+    def _xml_variation_picture_map(
+        cls,
+        variations_node: ET.Element | None,
+    ) -> dict[tuple[str, str], list[str]]:
+        picture_map: dict[tuple[str, str], list[str]] = {}
+        for pictures in cls._xml_children(variations_node, "Pictures"):
+            name = cls._xml_text(pictures, "VariationSpecificName")
+            if not name:
+                continue
+            for picture_set in cls._xml_children(pictures, "VariationSpecificPictureSet"):
+                value = cls._xml_text(picture_set, "VariationSpecificValue")
+                urls = cls._xml_child_texts(picture_set, "PictureURL")
+                if value and urls:
+                    picture_map[(name.casefold(), value.casefold())] = urls
+        return picture_map
+
+    @staticmethod
+    def _variation_images(
+        variation_specifics: dict[str, str],
+        picture_map: dict[tuple[str, str], list[str]],
+    ) -> list[str]:
+        urls: list[str] = []
+        for name, value in variation_specifics.items():
+            urls.extend(picture_map.get((name.casefold(), value.casefold()), []))
+        return EbayClient._dedupe_urls(urls)
+
+    @staticmethod
+    def _generated_variation_sku(
+        item_id: str,
+        variation_specifics: dict[str, str],
+        index: int,
+    ) -> str:
+        identity = "|".join(
+            f"{name}={value}" for name, value in sorted(variation_specifics.items())
+        ) or str(index)
+        suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
+        base = re.sub(r"[^A-Za-z0-9._-]+", "-", f"EBAY-{item_id}").strip("-.")
+        return f"{base[:39]}-{suffix}"
+
+    @staticmethod
+    def _clean_xml_description(value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = re.sub(r"<[^>]+>", " ", value)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned[:500] or None
+
+    @staticmethod
+    def _int_value(value: object) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -594,6 +985,22 @@ class EbayClient:
     ) -> httpx.Response:
         return await self._request_with_retry(client, "POST", path, data=data, headers=headers)
 
+    async def _post_content(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        content: bytes | str,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return await self._request_with_retry(
+            client,
+            "POST",
+            path,
+            content=content,
+            headers=headers,
+        )
+
     async def _request_with_retry(
         self,
         client: httpx.AsyncClient,
@@ -602,13 +1009,17 @@ class EbayClient:
         *,
         params: dict[str, object] | None = None,
         data: dict[str, object] | None = None,
+        content: bytes | str | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         last_exc: httpx.HTTPError | None = None
         for attempt, delay in enumerate((*RETRY_DELAYS_SECONDS, 0.0), start=1):
             try:
                 if method == "POST":
-                    response = await client.post(path, data=data, headers=headers)
+                    if content is not None:
+                        response = await client.post(path, content=content, headers=headers)
+                    else:
+                        response = await client.post(path, data=data, headers=headers)
                 else:
                     response = await client.get(path, params=params, headers=headers)
             except httpx.HTTPError as exc:
@@ -645,7 +1056,10 @@ class EbayClient:
                     path,
                 )
                 if method == "POST":
-                    response = await client.post(path, data=data, headers=headers)
+                    if content is not None:
+                        response = await client.post(path, content=content, headers=headers)
+                    else:
+                        response = await client.post(path, data=data, headers=headers)
                 else:
                     response = await client.get(path, params=params, headers=headers)
             return response
@@ -678,7 +1092,10 @@ class EbayClient:
         if headers is None:
             return None
         updated = dict(headers)
-        updated["Authorization"] = f"Bearer {self._access_token}"
+        if "X-EBAY-API-IAF-TOKEN" in updated:
+            updated["X-EBAY-API-IAF-TOKEN"] = str(self._access_token or "")
+        else:
+            updated["Authorization"] = f"Bearer {self._access_token}"
         return updated
 
     @staticmethod

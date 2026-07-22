@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     ebay_marketplace_id: str = "EBAY_US"
     ebay_seller_username: str = "exactspec-electronics"
     ebay_browse_search_query: str = " "
+    ebay_trading_compatibility_level: str = "1455"
     ebay_store_url: str = "https://www.ebay.com/str/exactspec"
     ebay_store_backup_url: str | None = "https://ebay.us/m/GDmaKw"
     ebay_store_sale_media_url: str | None = (
