@@ -44,6 +44,7 @@ from app.models import (
     WalmartImportRequest,
     WalmartDraftGenerateRequest,
     WalmartInventorySyncRequest,
+    WalmartItemOverride,
 )
 from app.reports import (
     MetricoolReportError,
@@ -97,6 +98,10 @@ walmart_draft_status: dict[str, Any] = {
     "message": "Walmart API draft staging has not run yet.",
     "last_attempt_at": None,
 }
+walmart_unpublished_status: dict[str, Any] = repository.latest_walmart_unpublished_job() or {
+    "status": "not_authorized",
+    "message": "No one-time zero-inventory Walmart offer batch has been authorized.",
+}
 app = FastAPI(title=settings.app_name)
 logger = logging.getLogger(__name__)
 
@@ -121,6 +126,7 @@ def health() -> dict[str, Any]:
             **walmart_draft_status,
             "stored": repository.walmart_draft_summary(),
         },
+        "walmart_unpublished": walmart_unpublished_status,
     }
 
 
@@ -275,6 +281,9 @@ async def _startup_inventory_refresh() -> None:
                 await _generate_walmart_drafts(
                     WalmartDraftGenerateRequest(sync_ebay_first=False)
                 )
+                batch_id = str(settings.walmart_unpublished_batch_id or "").strip()
+                if batch_id:
+                    await _submit_unpublished_batch_once(batch_id)
             except Exception as exc:
                 logger.warning("Walmart API draft staging failed at startup: %s", exc)
         return
@@ -458,17 +467,21 @@ async def _generate_walmart_drafts(
     stored = repository.upsert_walmart_drafts(drafts)
     catalog_counts: dict[str, int] = {}
     missing_identifier = 0
+    verified_matches = 0
     for draft in drafts:
         catalog_status = str(draft["catalog_status"])
         catalog_counts[catalog_status] = catalog_counts.get(catalog_status, 0) + 1
         if "product_identifier" in draft["missing_fields"]:
             missing_identifier += 1
+        if draft["status"] == "draft_verified_match":
+            verified_matches += 1
 
     walmart_draft_status = {
         "status": "staged",
         "generated": stored,
         "catalog_status": catalog_counts,
         "missing_identifier": missing_identifier,
+        "verified_matches": verified_matches,
         "message": (
             "Stored API-enriched drafts in the Render database. "
             "No Walmart item or inventory feed was submitted."
@@ -482,6 +495,157 @@ async def _generate_walmart_drafts(
         "walmart_feed_submitted": False,
         "drafts": drafts,
     }
+
+
+async def _submit_unpublished_batch_once(batch_id: str) -> dict[str, Any]:
+    global walmart_unpublished_status
+    clean_batch_id = str(batch_id or "").strip()
+    if not clean_batch_id:
+        raise ValueError("A non-empty Walmart unpublished batch ID is required.")
+
+    existing = repository.walmart_unpublished_job(clean_batch_id)
+    if existing and existing.get("status") in {
+        "submitted",
+        "processing",
+        "completed",
+        "no_verified_matches",
+    }:
+        walmart_unpublished_status = existing
+        return existing
+    if (
+        existing
+        and existing.get("status") == "offer_submitted_inventory_pending"
+        and existing.get("offer_feed_id")
+    ):
+        matched_skus = [str(sku) for sku in existing.get("matched_skus") or []]
+        matched_items = repository.ebay_items(
+            matched_skus,
+            limit=max(1, len(matched_skus)),
+            include_inactive=False,
+        )
+        zero_inventory_items = [item.model_copy(update={"quantity": 0}) for item in matched_items]
+        inventory_submission = await walmart_client.submit_inventory_feed(
+            build_inventory_feed(zero_inventory_items)
+        )
+        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+            clean_batch_id,
+            status="submitted",
+            matched_skus=matched_skus,
+            skipped_skus=existing.get("skipped_skus") or [],
+            offer_feed_id=str(existing["offer_feed_id"]),
+            inventory_feed_id=str(inventory_submission["feed_id"]),
+        )
+        repository.set_walmart_draft_status(matched_skus, "unpublished_offer_submitted")
+        return walmart_unpublished_status
+
+    drafts = repository.walmart_drafts(limit=200)
+    verified_drafts = [
+        draft
+        for draft in drafts
+        if draft.get("status") == "draft_verified_match"
+        and isinstance(draft.get("prepared_listing"), dict)
+        and isinstance(draft["prepared_listing"].get("product_identifier"), dict)
+    ]
+    verified_skus = [str(draft["sku"]) for draft in verified_drafts]
+    skipped_skus = [str(draft["sku"]) for draft in drafts if str(draft["sku"]) not in verified_skus]
+    if not verified_skus:
+        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+            clean_batch_id,
+            status="no_verified_matches",
+            skipped_skus=skipped_skus,
+            error_message="No draft passed the exact-match safeguards; no Walmart feed was submitted.",
+        )
+        return walmart_unpublished_status
+
+    overrides: dict[str, WalmartItemOverride] = {}
+    for draft in verified_drafts:
+        identifier = draft["prepared_listing"]["product_identifier"]
+        overrides[str(draft["sku"])] = WalmartItemOverride(
+            product_id_type=identifier["type"],
+            product_id=identifier["value"],
+        )
+    preflight = await _prepare_walmart_import(
+        WalmartImportRequest(
+            skus=verified_skus,
+            overrides=overrides,
+            max_items=len(verified_skus),
+            sync_ebay_first=False,
+            verify_catalog=True,
+        ),
+        force_verify_catalog=True,
+    )
+    ready_skus = [str(item["sku"]) for item in preflight["items"] if item.get("ready")]
+    skipped_skus = sorted(set(skipped_skus) | (set(verified_skus) - set(ready_skus)))
+    if not ready_skus:
+        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+            clean_batch_id,
+            status="no_verified_matches",
+            skipped_skus=skipped_skus,
+            error_message="Walmart SPEC verification rejected every candidate; no feed was submitted.",
+        )
+        return walmart_unpublished_status
+
+    ready_entries = [
+        entry
+        for entry in preflight["payload"]["MPItem"]
+        if entry.get("Item", {}).get("sku") in set(ready_skus)
+    ]
+    offer_payload = {**preflight["payload"], "MPItem": ready_entries}
+    repository.upsert_walmart_unpublished_job(
+        clean_batch_id,
+        status="submitting_offer",
+        matched_skus=ready_skus,
+        skipped_skus=skipped_skus,
+    )
+
+    try:
+        offer_submission = await walmart_client.submit_offer_match_feed(offer_payload)
+    except WalmartApiError as exc:
+        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+            clean_batch_id,
+            status="offer_failed",
+            matched_skus=ready_skus,
+            skipped_skus=skipped_skus,
+            error_message=str(exc),
+        )
+        raise
+
+    offer_feed_id = str(offer_submission["feed_id"])
+    repository.upsert_walmart_unpublished_job(
+        clean_batch_id,
+        status="offer_submitted_inventory_pending",
+        matched_skus=ready_skus,
+        skipped_skus=skipped_skus,
+        offer_feed_id=offer_feed_id,
+    )
+
+    ready_items = repository.ebay_items(ready_skus, limit=len(ready_skus), include_inactive=False)
+    zero_inventory_items = [item.model_copy(update={"quantity": 0}) for item in ready_items]
+    try:
+        inventory_submission = await walmart_client.submit_inventory_feed(
+            build_inventory_feed(zero_inventory_items)
+        )
+    except WalmartApiError as exc:
+        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+            clean_batch_id,
+            status="offer_submitted_inventory_pending",
+            matched_skus=ready_skus,
+            skipped_skus=skipped_skus,
+            offer_feed_id=offer_feed_id,
+            error_message=str(exc),
+        )
+        raise
+
+    walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+        clean_batch_id,
+        status="submitted",
+        matched_skus=ready_skus,
+        skipped_skus=skipped_skus,
+        offer_feed_id=offer_feed_id,
+        inventory_feed_id=str(inventory_submission["feed_id"]),
+    )
+    repository.set_walmart_draft_status(ready_skus, "unpublished_offer_submitted")
+    return walmart_unpublished_status
 
 
 def _walmart_http_error(exc: WalmartApiError) -> HTTPException:
@@ -825,6 +989,57 @@ def walmart_drafts_summary() -> dict[str, Any]:
             "These API-enriched records remain staged until a separate confirmed publish request."
         ),
     }
+
+
+@app.get("/walmart/unpublished/summary")
+def walmart_unpublished_summary() -> dict[str, Any]:
+    job = repository.latest_walmart_unpublished_job()
+    return {
+        "job": job,
+        "authorized_batch_id": str(settings.walmart_unpublished_batch_id or "") or None,
+        "target_inventory_quantity": 0,
+        "seller_center_destination": "Unpublished",
+        "safety": (
+            "Only exact brand, model, variation, and identifier matches are submitted. "
+            "Ambiguous candidates are skipped."
+        ),
+    }
+
+
+@app.get("/walmart/unpublished/feeds")
+async def walmart_unpublished_feeds() -> dict[str, Any]:
+    job = repository.latest_walmart_unpublished_job()
+    if not job:
+        return {"job": None, "offer_feed": None, "inventory_feed": None}
+    result: dict[str, Any] = {"job": job, "offer_feed": None, "inventory_feed": None}
+    for result_key, job_key in (
+        ("offer_feed", "offer_feed_id"),
+        ("inventory_feed", "inventory_feed_id"),
+    ):
+        feed_id = job.get(job_key)
+        if not feed_id:
+            continue
+        try:
+            feed = await walmart_client.get_feed_status(str(feed_id), include_details=False)
+            result[result_key] = {
+                key: feed.get(key)
+                for key in (
+                    "feedId",
+                    "feedType",
+                    "feedStatus",
+                    "itemsReceived",
+                    "itemsSucceeded",
+                    "itemsFailed",
+                    "itemsProcessing",
+                    "itemDataErrorCount",
+                    "itemSystemErrorCount",
+                    "itemTimeoutErrorCount",
+                )
+                if key in feed
+            }
+        except WalmartApiError as exc:
+            result[result_key] = {"status": "lookup_failed", "http_status": exc.status_code}
+    return result
 
 
 @app.get("/walmart/drafts")

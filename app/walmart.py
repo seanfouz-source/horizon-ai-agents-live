@@ -388,6 +388,10 @@ def build_walmart_draft(
         "candidates": [],
     }
     candidates = catalog.get("candidates") if isinstance(catalog.get("candidates"), list) else []
+    verified_match, match_reason = select_verified_catalog_match(item, candidates)
+    if not identifier_type and verified_match:
+        identifier_type = str(verified_match["product_id_type"])
+        identifier = str(verified_match["product_id"])
 
     missing_fields: list[str] = []
     if not identifier_type or not identifier:
@@ -429,11 +433,88 @@ def build_walmart_draft(
         "prepared_listing": prepared_listing,
         "catalog_query": str(catalog.get("query") or build_walmart_catalog_query(item)),
         "catalog_candidates": candidates,
+        "verified_match": verified_match,
+        "match_reason": match_reason,
         "catalog_status": str(catalog.get("status") or "not_requested"),
-        "status": "draft_needs_review",
+        "status": "draft_verified_match" if verified_match else "draft_needs_review",
         "missing_fields": missing_fields,
         "lookup_error": lookup_error,
     }
+
+
+def select_verified_catalog_match(
+    item: InventoryItem,
+    candidates: Iterable[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str]:
+    specifics = {_normalize_key(key): str(value or "").strip() for key, value in item.item_specifics.items()}
+    source_brand = specifics.get("brand")
+    source_model = specifics.get("model")
+    if not source_brand or not source_model:
+        return None, "The eBay listing does not contain both a brand and model."
+
+    storage = specifics.get("storage") or specifics.get("storagecapacity")
+    size = specifics.get("size") or specifics.get("casesize")
+    color = (
+        specifics.get("devicecolor")
+        or specifics.get("manufacturercolor")
+        or specifics.get("color")
+        or specifics.get("colors")
+    )
+    category = _match_text(item.category)
+    if ("smartphone" in category or "tablet" in category) and not storage:
+        return None, "Storage is required to verify phone and tablet catalog variants."
+    if "smartwatch" in category and not size:
+        return None, "Case size is required to verify smartwatch catalog variants."
+
+    required_values = [value for value in (storage, size, color) if value]
+    source_brand_key = _match_text(source_brand)
+    source_model_key = _match_text(source_model)
+    verified: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        title = str(candidate.get("title") or "")
+        title_key = _match_text(title)
+        candidate_brand_key = _match_text(candidate.get("brand"))
+        if not title_key or source_model_key not in title_key:
+            continue
+        if candidate_brand_key:
+            if candidate_brand_key != source_brand_key:
+                continue
+        elif source_brand_key not in title_key:
+            continue
+        if any(_match_text(value) not in title_key for value in required_values):
+            continue
+
+        identifiers = candidate.get("identifiers")
+        if not isinstance(identifiers, dict):
+            continue
+        selected_type: str | None = None
+        selected_value: str | None = None
+        for identifier_type in PRODUCT_ID_TYPES:
+            candidate_value = _digits(identifiers.get(identifier_type))
+            if candidate_value and _valid_product_identifier(identifier_type, candidate_value):
+                selected_type = identifier_type
+                selected_value = candidate_value
+                break
+        if not selected_type or not selected_value:
+            continue
+        verified.append(
+            {
+                "confidence": "exact_brand_model_variant",
+                "product_id_type": selected_type,
+                "product_id": selected_value,
+                "walmart_item_id": candidate.get("walmart_item_id"),
+                "title": title,
+                "brand": candidate.get("brand"),
+            }
+        )
+
+    if len(verified) != 1:
+        if verified:
+            return None, f"{len(verified)} catalog candidates passed; exactly one is required."
+        return None, "No catalog candidate passed the exact brand, model, variation, and identifier checks."
+    return verified[0], "Exactly one Walmart catalog candidate passed all verification checks."
 
 
 def _build_offer_match_item(
@@ -595,6 +676,10 @@ def _digits(value: object) -> str:
 
 
 def _normalize_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _match_text(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
 

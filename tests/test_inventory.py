@@ -197,3 +197,27 @@ def test_walmart_drafts_are_persisted_and_summarized(tmp_path):
     assert summary["total"] == 1
     assert summary["by_status"] == {"draft_needs_review": 1}
     assert summary["by_catalog_status"] == {"candidates_found": 1}
+
+
+def test_walmart_unpublished_job_is_persistent_and_idempotent(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+
+    first = repository.upsert_walmart_unpublished_job(
+        "batch-1",
+        status="offer_submitted_inventory_pending",
+        matched_skus=["EBAY-123"],
+        skipped_skus=["EBAY-456"],
+        offer_feed_id="OFFER-FEED",
+    )
+    second = repository.upsert_walmart_unpublished_job(
+        "batch-1",
+        status="submitted",
+        matched_skus=["EBAY-123"],
+        skipped_skus=["EBAY-456"],
+        inventory_feed_id="INVENTORY-FEED",
+    )
+
+    assert first["offer_feed_id"] == "OFFER-FEED"
+    assert second["offer_feed_id"] == "OFFER-FEED"
+    assert second["inventory_feed_id"] == "INVENTORY-FEED"
+    assert repository.latest_walmart_unpublished_job() == second

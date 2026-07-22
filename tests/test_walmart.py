@@ -11,6 +11,7 @@ from app.walmart import (
     build_offer_match_preview,
     build_walmart_catalog_query,
     build_walmart_draft,
+    select_verified_catalog_match,
 )
 
 
@@ -143,6 +144,65 @@ def test_walmart_draft_preserves_ebay_data_without_inventing_identifier():
     assert draft["prepared_listing"]["product_identifier"] is None
     assert draft["catalog_candidates"][0]["walmart_item_id"] == "987"
     assert "product_identifier" in draft["missing_fields"]
+
+
+def test_verified_catalog_match_requires_unique_exact_variant():
+    item = InventoryItem(
+        sku="EBAY-123-GRAY",
+        title="Samsung Galaxy Z Flip5 512GB Gray Unlocked",
+        category="Cell Phones & Accessories:Cell Phones & Smartphones",
+        item_specifics={
+            "Brand": "Samsung",
+            "Model": "Samsung Galaxy Z Flip5",
+            "Storage": "512 GB",
+            "Color": "Gray",
+        },
+    )
+    candidates = [
+        {
+            "walmart_item_id": "987",
+            "title": "Samsung Galaxy Z Flip5 512GB Gray Factory Unlocked",
+            "brand": "Samsung",
+            "identifiers": {"GTIN": "00887276900123"},
+        },
+        {
+            "walmart_item_id": "654",
+            "title": "Samsung Galaxy Z Flip5 256GB Gray Factory Unlocked",
+            "brand": "Samsung",
+            "identifiers": {"GTIN": "00887276900456"},
+        },
+    ]
+
+    match, reason = select_verified_catalog_match(item, candidates)
+
+    assert match is not None
+    assert match["walmart_item_id"] == "987"
+    assert match["product_id"] == "00887276900123"
+    assert "Exactly one" in reason
+
+
+def test_verified_catalog_match_rejects_ambiguous_results():
+    item = InventoryItem(
+        sku="EBAY-123",
+        title="Apple Watch Series 11 42mm Black",
+        category="Cell Phones & Accessories:Smart Watches",
+        item_specifics={
+            "Brand": "Apple",
+            "Model": "Apple Watch Series 11",
+            "Size": "42mm",
+            "Color": "Black",
+        },
+    )
+    candidate = {
+        "title": "Apple Watch Series 11 42mm Black GPS + Cellular",
+        "brand": "Apple",
+        "identifiers": {"GTIN": "00000000000123"},
+    }
+
+    match, reason = select_verified_catalog_match(item, [candidate, dict(candidate)])
+
+    assert match is None
+    assert reason.startswith("2 catalog candidates")
 
 
 class FakeAsyncClient:

@@ -96,6 +96,20 @@ CREATE TABLE IF NOT EXISTS walmart_listing_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_walmart_drafts_status ON walmart_listing_drafts(status);
 CREATE INDEX IF NOT EXISTS idx_walmart_drafts_ebay_item_id ON walmart_listing_drafts(ebay_item_id);
+
+CREATE TABLE IF NOT EXISTS walmart_unpublished_jobs (
+    batch_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    matched_skus TEXT NOT NULL DEFAULT '[]',
+    skipped_skus TEXT NOT NULL DEFAULT '[]',
+    offer_feed_id TEXT,
+    inventory_feed_id TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_walmart_unpublished_jobs_status
+ON walmart_unpublished_jobs(status);
 """
 
 
@@ -465,6 +479,85 @@ class InventoryRepository:
             "latest_updated_at": latest_row["latest_updated_at"],
         }
 
+    def set_walmart_draft_status(self, skus: Iterable[str], status: str) -> int:
+        selected_skus = [str(sku).strip() for sku in skus if str(sku).strip()]
+        if not selected_skus:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE walmart_listing_drafts
+                SET status = ?, updated_at = ?
+                WHERE sku IN ({', '.join('?' for _ in selected_skus)})
+                """,
+                (status, now, *selected_skus),
+            )
+        return int(cursor.rowcount)
+
+    def upsert_walmart_unpublished_job(
+        self,
+        batch_id: str,
+        *,
+        status: str,
+        matched_skus: Iterable[str] = (),
+        skipped_skus: Iterable[str] = (),
+        offer_feed_id: str | None = None,
+        inventory_feed_id: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO walmart_unpublished_jobs (
+                    batch_id, status, matched_skus, skipped_skus,
+                    offer_feed_id, inventory_feed_id, error_message,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(batch_id) DO UPDATE SET
+                    status = excluded.status,
+                    matched_skus = excluded.matched_skus,
+                    skipped_skus = excluded.skipped_skus,
+                    offer_feed_id = COALESCE(excluded.offer_feed_id, offer_feed_id),
+                    inventory_feed_id = COALESCE(excluded.inventory_feed_id, inventory_feed_id),
+                    error_message = excluded.error_message,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    batch_id,
+                    status,
+                    json.dumps(list(matched_skus)),
+                    json.dumps(list(skipped_skus)),
+                    offer_feed_id,
+                    inventory_feed_id,
+                    error_message,
+                    now,
+                    now,
+                ),
+            )
+        return self.walmart_unpublished_job(batch_id) or {}
+
+    def walmart_unpublished_job(self, batch_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM walmart_unpublished_jobs WHERE batch_id = ?",
+                (str(batch_id),),
+            ).fetchone()
+        return self._walmart_job_from_row(row) if row else None
+
+    def latest_walmart_unpublished_job(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM walmart_unpublished_jobs
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return self._walmart_job_from_row(row) if row else None
+
     def social_post_count_for_day(self, scheduled_day: date | str) -> int:
         day = scheduled_day.isoformat() if isinstance(scheduled_day, date) else str(scheduled_day)[:10]
         with self.connect() as connection:
@@ -643,4 +736,14 @@ class InventoryRepository:
                 data[key] = json.loads(data.get(key) or json.dumps(default))
             except (TypeError, ValueError):
                 data[key] = default
+        return data
+
+    @staticmethod
+    def _walmart_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        for key in ("matched_skus", "skipped_skus"):
+            try:
+                data[key] = json.loads(data.get(key) or "[]")
+            except (TypeError, ValueError):
+                data[key] = []
         return data

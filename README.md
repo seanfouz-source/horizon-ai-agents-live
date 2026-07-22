@@ -243,6 +243,14 @@ The generate request accepts `sync_ebay_first`, `search_walmart_catalog`,
 `max_items`, optional `skus`, and `catalog_candidates_per_item`. Publishing
 remains a separate operation behind the existing `confirm=true` guard.
 
+For an explicitly authorized API-only batch that must be visible in Walmart
+without becoming buyable, set a unique `WALMART_UNPUBLISHED_BATCH_ID`. The
+startup worker submits only a single exact catalog match for each SKU and then
+submits inventory quantity `0`. The batch ID and persistent job record make the
+operation idempotent; ambiguous matches are skipped. Monitor the non-sensitive
+job state at `GET /walmart/unpublished/summary` and Walmart's live processing
+responses at `GET /walmart/unpublished/feeds`.
+
 Add these secret environment variables to the `horizon-ai-agents` Render web
 service. Do not commit their values:
 
