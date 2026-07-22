@@ -75,6 +75,8 @@ services:
         value: Walmart Marketplace
       - key: WALMART_CHANNEL_TYPE
         sync: false
+      - key: WALMART_STAGE_DRAFTS_ON_STARTUP
+        value: "true"
       - key: METRICOOL_DAILY_POST_LIMIT
         value: "2"
       - key: METRICOOL_MORNING_POST_TIME

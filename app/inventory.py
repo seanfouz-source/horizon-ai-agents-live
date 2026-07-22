@@ -3,7 +3,7 @@ import sqlite3
 import string
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from app.models import InventoryItem
 
@@ -78,7 +78,24 @@ CREATE TABLE IF NOT EXISTS social_post_history (
 CREATE INDEX IF NOT EXISTS idx_social_history_day ON social_post_history(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_social_history_ebay_item_id ON social_post_history(ebay_item_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_social_history_unique_scheduled_item
-ON social_post_history(ebay_item_id, scheduled_at, platform)
+ON social_post_history(ebay_item_id, scheduled_at, platform);
+
+CREATE TABLE IF NOT EXISTS walmart_listing_drafts (
+    sku TEXT PRIMARY KEY,
+    ebay_item_id TEXT,
+    source_snapshot TEXT NOT NULL,
+    prepared_listing TEXT NOT NULL,
+    catalog_query TEXT,
+    catalog_candidates TEXT NOT NULL DEFAULT '[]',
+    catalog_status TEXT NOT NULL,
+    status TEXT NOT NULL,
+    missing_fields TEXT NOT NULL DEFAULT '[]',
+    lookup_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_walmart_drafts_status ON walmart_listing_drafts(status);
+CREATE INDEX IF NOT EXISTS idx_walmart_drafts_ebay_item_id ON walmart_listing_drafts(ebay_item_id);
 """
 
 
@@ -335,6 +352,119 @@ class InventoryRepository:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
+    def upsert_walmart_drafts(self, drafts: Iterable[dict[str, Any]]) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        rows: list[dict[str, Any]] = []
+        for draft in drafts:
+            sku = str(draft.get("sku") or "").strip()
+            if not sku:
+                continue
+            rows.append(
+                {
+                    "sku": sku,
+                    "ebay_item_id": draft.get("ebay_item_id"),
+                    "source_snapshot": json.dumps(draft.get("source_snapshot") or {}, sort_keys=True),
+                    "prepared_listing": json.dumps(draft.get("prepared_listing") or {}, sort_keys=True),
+                    "catalog_query": draft.get("catalog_query"),
+                    "catalog_candidates": json.dumps(draft.get("catalog_candidates") or [], sort_keys=True),
+                    "catalog_status": str(draft.get("catalog_status") or "not_requested"),
+                    "status": str(draft.get("status") or "draft_needs_review"),
+                    "missing_fields": json.dumps(draft.get("missing_fields") or []),
+                    "lookup_error": draft.get("lookup_error"),
+                    "created_at": str(draft.get("created_at") or now),
+                    "updated_at": now,
+                }
+            )
+        if not rows:
+            return 0
+
+        with self.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO walmart_listing_drafts (
+                    sku, ebay_item_id, source_snapshot, prepared_listing,
+                    catalog_query, catalog_candidates, catalog_status, status,
+                    missing_fields, lookup_error, created_at, updated_at
+                )
+                VALUES (
+                    :sku, :ebay_item_id, :source_snapshot, :prepared_listing,
+                    :catalog_query, :catalog_candidates, :catalog_status, :status,
+                    :missing_fields, :lookup_error, :created_at, :updated_at
+                )
+                ON CONFLICT(sku) DO UPDATE SET
+                    ebay_item_id = excluded.ebay_item_id,
+                    source_snapshot = excluded.source_snapshot,
+                    prepared_listing = excluded.prepared_listing,
+                    catalog_query = excluded.catalog_query,
+                    catalog_candidates = excluded.catalog_candidates,
+                    catalog_status = excluded.catalog_status,
+                    status = excluded.status,
+                    missing_fields = excluded.missing_fields,
+                    lookup_error = excluded.lookup_error,
+                    updated_at = excluded.updated_at
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def walmart_drafts(
+        self,
+        skus: Iterable[str] | None = None,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        selected_skus = [str(sku).strip() for sku in (skus or []) if str(sku).strip()]
+        params: list[object] = []
+        where = ""
+        if selected_skus:
+            where = f"WHERE sku IN ({', '.join('?' for _ in selected_skus)})"
+            params.extend(selected_skus)
+        params.append(max(1, min(limit, 200)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM walmart_listing_drafts
+                {where}
+                ORDER BY updated_at DESC, sku
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._walmart_draft_from_row(row) for row in rows]
+
+    def walmart_draft_summary(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            total_row = connection.execute(
+                "SELECT COUNT(*) AS total FROM walmart_listing_drafts"
+            ).fetchone()
+            status_rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM walmart_listing_drafts
+                GROUP BY status
+                ORDER BY status
+                """
+            ).fetchall()
+            catalog_rows = connection.execute(
+                """
+                SELECT catalog_status, COUNT(*) AS total
+                FROM walmart_listing_drafts
+                GROUP BY catalog_status
+                ORDER BY catalog_status
+                """
+            ).fetchall()
+            latest_row = connection.execute(
+                "SELECT MAX(updated_at) AS latest_updated_at FROM walmart_listing_drafts"
+            ).fetchone()
+        return {
+            "total": int(total_row["total"]),
+            "by_status": {str(row["status"]): int(row["total"]) for row in status_rows},
+            "by_catalog_status": {
+                str(row["catalog_status"]): int(row["total"]) for row in catalog_rows
+            },
+            "latest_updated_at": latest_row["latest_updated_at"],
+        }
+
     def social_post_count_for_day(self, scheduled_day: date | str) -> int:
         day = scheduled_day.isoformat() if isinstance(scheduled_day, date) else str(scheduled_day)[:10]
         with self.connect() as connection:
@@ -499,3 +629,18 @@ class InventoryRepository:
         data["item_specifics"] = json.loads(data.get("item_specifics") or "{}")
         data["image_urls"] = json.loads(data.get("image_urls") or "[]")
         return InventoryItem.model_validate(data)
+
+    @staticmethod
+    def _walmart_draft_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        for key, default in (
+            ("source_snapshot", {}),
+            ("prepared_listing", {}),
+            ("catalog_candidates", []),
+            ("missing_fields", []),
+        ):
+            try:
+                data[key] = json.loads(data.get(key) or json.dumps(default))
+            except (TypeError, ValueError):
+                data[key] = default
+        return data

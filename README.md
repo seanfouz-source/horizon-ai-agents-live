@@ -224,6 +224,25 @@ tablets that already exist in Walmart's catalog: Walmart reuses its catalog
 content while this service supplies the seller SKU, product identifier, price,
 condition, shipping weight, and condition image when required.
 
+Walmart's public Marketplace API does not provide the **Save draft** action
+available in Seller Center. To prevent accidental publication, this service
+first stores API-enriched drafts in its persistent Render database. On startup,
+the live eBay API snapshot is refreshed, Walmart's catalog is searched by the
+listing's brand/model/variation data, and the resulting candidates are attached
+to each draft. No Walmart feed is submitted by this staging workflow.
+
+Safe draft endpoints:
+
+```text
+GET  /walmart/drafts/summary
+GET  /walmart/drafts?secret=YOUR_WEBHOOK_SHARED_SECRET
+POST /walmart/drafts/generate?secret=YOUR_WEBHOOK_SHARED_SECRET
+```
+
+The generate request accepts `sync_ebay_first`, `search_walmart_catalog`,
+`max_items`, optional `skus`, and `catalog_candidates_per_item`. Publishing
+remains a separate operation behind the existing `confirm=true` guard.
+
 Add these secret environment variables to the `horizon-ai-agents` Render web
 service. Do not commit their values:
 

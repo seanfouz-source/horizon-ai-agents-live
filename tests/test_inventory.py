@@ -171,3 +171,29 @@ def test_item_for_social_reference_resolves_post_history_to_listing(tmp_path):
 
     assert item is not None
     assert item.ebay_item_id == "123"
+
+
+def test_walmart_drafts_are_persisted_and_summarized(tmp_path):
+    repository = InventoryRepository(tmp_path / "inventory.db")
+    draft = {
+        "sku": "EBAY-123-GRAY",
+        "ebay_item_id": "123",
+        "source_snapshot": {"sku": "EBAY-123-GRAY", "source": "ebay-trading-api"},
+        "prepared_listing": {"product_name": "Samsung Galaxy Z Flip5", "price": 449},
+        "catalog_query": "Samsung Galaxy Z Flip5 512 GB Gray",
+        "catalog_candidates": [{"walmart_item_id": "987"}],
+        "catalog_status": "candidates_found",
+        "status": "draft_needs_review",
+        "missing_fields": ["product_identifier"],
+    }
+
+    assert repository.upsert_walmart_drafts([draft]) == 1
+
+    stored = repository.walmart_drafts()
+    summary = repository.walmart_draft_summary()
+    assert stored[0]["sku"] == "EBAY-123-GRAY"
+    assert stored[0]["prepared_listing"]["price"] == 449
+    assert stored[0]["catalog_candidates"] == [{"walmart_item_id": "987"}]
+    assert summary["total"] == 1
+    assert summary["by_status"] == {"draft_needs_review": 1}
+    assert summary["by_catalog_status"] == {"candidates_found": 1}

@@ -69,6 +69,14 @@ class WalmartInventorySyncRequest(BaseModel):
     confirm: bool = False
 
 
+class WalmartDraftGenerateRequest(BaseModel):
+    skus: list[str] = Field(default_factory=list)
+    max_items: int = Field(default=200, ge=1, le=200)
+    sync_ebay_first: bool = True
+    search_walmart_catalog: bool = True
+    catalog_candidates_per_item: int = Field(default=5, ge=1, le=10)
+
+
 class CustomerQuestion(BaseModel):
     message: str
     channel: Channel = "unknown"

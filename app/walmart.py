@@ -99,6 +99,37 @@ class WalmartMarketplaceClient:
             "product_type": first.get("productType") if first else None,
         }
 
+    async def search_catalog_by_query(self, query: str, *, limit: int = 5) -> dict[str, Any]:
+        clean_query = re.sub(r"\s+", " ", str(query or "")).strip()
+        if not clean_query:
+            return {
+                "status": "not_checked",
+                "query": clean_query,
+                "total_candidates": 0,
+                "candidates": [],
+                "reason": "No catalog search query could be built from the eBay listing.",
+            }
+
+        response = await self._request(
+            "GET",
+            "/v3/items/walmart/search",
+            params={"query": clean_query, "responseFormat": "DEFAULT"},
+        )
+        payload = self._json_object(response)
+        raw_items = payload.get("items")
+        items = raw_items if isinstance(raw_items, list) else []
+        candidates = [
+            candidate
+            for candidate in (_catalog_candidate(item) for item in items[: max(1, min(limit, 10))])
+            if candidate
+        ]
+        return {
+            "status": "candidates_found" if candidates else "no_candidates",
+            "query": clean_query,
+            "total_candidates": len(items),
+            "candidates": candidates,
+        }
+
     async def submit_offer_match_feed(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = await self._request(
             "POST",
@@ -316,6 +347,95 @@ def build_inventory_feed(items: Iterable[InventoryItem]) -> dict[str, Any]:
     return {"InventoryHeader": {"version": "1.4"}, "Inventory": inventory}
 
 
+def build_walmart_catalog_query(item: InventoryItem) -> str:
+    specifics = {_normalize_key(key): str(value or "").strip() for key, value in item.item_specifics.items()}
+    values: list[str] = []
+    for key_group in (
+        ("brand",),
+        ("model",),
+        ("storage", "storagecapacity"),
+        ("devicecolor", "manufacturercolor", "color", "colors"),
+        ("size", "casesize"),
+        ("bandcolor",),
+    ):
+        value = next((specifics.get(key) for key in key_group if specifics.get(key)), None)
+        if value and value.lower() not in {entry.lower() for entry in values}:
+            values.append(value)
+
+    if not specifics.get("model"):
+        title = re.sub(r"\s+", " ", item.title).strip()
+        if title:
+            values.insert(0, title[:140])
+    query = re.sub(r"\s+", " ", " ".join(values)).strip()
+    return query[:200]
+
+
+def build_walmart_draft(
+    item: InventoryItem,
+    catalog_result: dict[str, Any] | None = None,
+    *,
+    lookup_error: str | None = None,
+) -> dict[str, Any]:
+    specifics = {_normalize_key(key): str(value or "").strip() for key, value in item.item_specifics.items()}
+    identifier_type, identifier = _product_identifier(item, WalmartItemOverride())
+    shipping_weight_lbs = _shipping_weight_lbs(item.item_specifics)
+    mapped_condition = _walmart_condition(item.condition)
+    images = [url for url in [item.image_url, *item.image_urls] if str(url or "").strip()]
+    images = list(dict.fromkeys(images))
+    catalog = catalog_result or {
+        "status": "lookup_failed" if lookup_error else "not_requested",
+        "query": build_walmart_catalog_query(item),
+        "candidates": [],
+    }
+    candidates = catalog.get("candidates") if isinstance(catalog.get("candidates"), list) else []
+
+    missing_fields: list[str] = []
+    if not identifier_type or not identifier:
+        missing_fields.append("product_identifier")
+    if shipping_weight_lbs is None:
+        missing_fields.append("shipping_weight_lbs")
+    if not mapped_condition:
+        missing_fields.append("walmart_condition")
+    if not specifics.get("brand"):
+        missing_fields.append("brand")
+    if not images:
+        missing_fields.append("images")
+
+    prepared_listing = {
+        "sku": item.sku,
+        "product_name": item.title,
+        "site_description": item.description,
+        "brand": specifics.get("brand"),
+        "model": specifics.get("model"),
+        "category": item.category,
+        "condition": mapped_condition,
+        "source_condition": item.condition,
+        "price": item.price,
+        "currency": item.currency,
+        "quantity": item.quantity,
+        "shipping_weight_lbs": shipping_weight_lbs,
+        "product_identifier": (
+            {"type": identifier_type, "value": identifier}
+            if identifier_type and identifier
+            else None
+        ),
+        "images": images,
+        "item_specifics": item.item_specifics,
+    }
+    return {
+        "sku": item.sku,
+        "ebay_item_id": item.ebay_item_id,
+        "source_snapshot": item.model_dump(mode="json"),
+        "prepared_listing": prepared_listing,
+        "catalog_query": str(catalog.get("query") or build_walmart_catalog_query(item)),
+        "catalog_candidates": candidates,
+        "catalog_status": str(catalog.get("status") or "not_requested"),
+        "status": "draft_needs_review",
+        "missing_fields": missing_fields,
+        "lookup_error": lookup_error,
+    }
+
+
 def _build_offer_match_item(
     item: InventoryItem,
     override: WalmartItemOverride,
@@ -476,3 +596,48 @@ def _digits(value: object) -> str:
 
 def _normalize_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _catalog_candidate(raw_item: object) -> dict[str, Any] | None:
+    if not isinstance(raw_item, dict):
+        return None
+
+    def first_value(*keys: str) -> Any:
+        for key in keys:
+            value = raw_item.get(key)
+            if value not in (None, "", [], {}):
+                return value
+        return None
+
+    identifiers: dict[str, str] = {}
+    for identifier_type, keys in {
+        "GTIN": ("gtin", "GTIN"),
+        "UPC": ("upc", "UPC"),
+        "EAN": ("ean", "EAN"),
+        "ISBN": ("isbn", "ISBN"),
+    }.items():
+        value = first_value(*keys)
+        if value is not None:
+            clean = _digits(value)
+            if clean:
+                identifiers[identifier_type] = clean
+
+    nested_identifiers = raw_item.get("productIdentifiers")
+    if isinstance(nested_identifiers, dict):
+        nested_type = str(nested_identifiers.get("productIdType") or "").upper()
+        nested_value = _digits(nested_identifiers.get("productId"))
+        if nested_type in PRODUCT_ID_TYPES and nested_value:
+            identifiers.setdefault(nested_type, nested_value)
+
+    candidate = {
+        "walmart_item_id": first_value("itemId", "walmartItemId", "usItemId"),
+        "title": first_value("productName", "title", "itemName", "name"),
+        "brand": first_value("brand", "brandName"),
+        "product_type": first_value("productType", "productTypeName"),
+        "category_path": first_value("categoryPath", "category"),
+        "image_url": first_value("primaryImageUrl", "imageUrl", "thumbnailUrl"),
+        "identifiers": identifiers,
+    }
+    if not any(value not in (None, "", {}) for value in candidate.values()):
+        return None
+    return candidate

@@ -5,7 +5,13 @@ import httpx
 
 import app.walmart as walmart_module
 from app.models import InventoryItem, WalmartItemOverride
-from app.walmart import WalmartMarketplaceClient, build_inventory_feed, build_offer_match_preview
+from app.walmart import (
+    WalmartMarketplaceClient,
+    build_inventory_feed,
+    build_offer_match_preview,
+    build_walmart_catalog_query,
+    build_walmart_draft,
+)
 
 
 def test_offer_match_preview_maps_ebay_fields():
@@ -103,6 +109,42 @@ def test_inventory_feed_includes_zero_quantity_for_ended_listings():
     assert [row["quantity"]["amount"] for row in payload["Inventory"]] == [2, 0]
 
 
+def test_walmart_draft_preserves_ebay_data_without_inventing_identifier():
+    item = InventoryItem(
+        sku="EBAY-123-GRAY",
+        ebay_item_id="123",
+        title="Samsung Galaxy Z Flip5 512GB Gray Unlocked",
+        description="Open-box phone with original packaging.",
+        condition="Open box",
+        price=449,
+        quantity=5,
+        image_url="https://i.ebayimg.com/images/g/demo/s-l1600.jpg",
+        category="Cell Phones & Accessories:Cell Phones & Smartphones",
+        item_specifics={
+            "Brand": "Samsung",
+            "Model": "Samsung Galaxy Z Flip5",
+            "Storage": "512 GB",
+            "Color": "Gray",
+            "Shipping Weight": "0.5 lb",
+        },
+        source="ebay-trading-api",
+    )
+    catalog = {
+        "status": "candidates_found",
+        "query": build_walmart_catalog_query(item),
+        "candidates": [{"walmart_item_id": "987", "title": item.title, "identifiers": {}}],
+    }
+
+    draft = build_walmart_draft(item, catalog)
+
+    assert draft["status"] == "draft_needs_review"
+    assert draft["prepared_listing"]["shipping_weight_lbs"] == 0.5
+    assert draft["prepared_listing"]["condition"] == "Open Box"
+    assert draft["prepared_listing"]["product_identifier"] is None
+    assert draft["catalog_candidates"][0]["walmart_item_id"] == "987"
+    assert "product_identifier" in draft["missing_fields"]
+
+
 class FakeAsyncClient:
     def __init__(self, handler, *args, **kwargs):
         self.handler = handler
@@ -190,3 +232,57 @@ def test_walmart_catalog_search_reports_match(monkeypatch):
 
     assert result["matched"] is True
     assert result["feed_type"] == "MP_ITEM_MATCH"
+
+
+def test_walmart_catalog_keyword_search_returns_sanitized_candidates(monkeypatch):
+    def handler(method, path, headers, **kwargs):
+        request = httpx.Request(method, f"https://marketplace.walmartapis.com{path}", headers=headers)
+        if path == "/v3/token":
+            return httpx.Response(200, json={"access_token": "access-token"}, request=request)
+        if path == "/v3/items/walmart/search":
+            assert kwargs["params"] == {
+                "query": "Samsung Galaxy Z Flip5 512 GB Gray",
+                "responseFormat": "DEFAULT",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "itemId": "987",
+                            "productName": "Samsung Galaxy Z Flip5 512GB",
+                            "brand": "Samsung",
+                            "productType": "Cell Phones",
+                            "gtin": "00887276900123",
+                            "irrelevantInternalField": "not persisted",
+                        }
+                    ]
+                },
+                request=request,
+            )
+        raise AssertionError(f"Unexpected Walmart request: {method} {path}")
+
+    monkeypatch.setattr(
+        walmart_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: FakeAsyncClient(handler, *args, **kwargs),
+    )
+
+    result = asyncio.run(
+        WalmartMarketplaceClient(_settings()).search_catalog_by_query(
+            "Samsung Galaxy Z Flip5 512 GB Gray"
+        )
+    )
+
+    assert result["status"] == "candidates_found"
+    assert result["candidates"] == [
+        {
+            "walmart_item_id": "987",
+            "title": "Samsung Galaxy Z Flip5 512GB",
+            "brand": "Samsung",
+            "product_type": "Cell Phones",
+            "category_path": None,
+            "image_url": None,
+            "identifiers": {"GTIN": "00887276900123"},
+        }
+    ]

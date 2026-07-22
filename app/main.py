@@ -42,6 +42,7 @@ from app.models import (
     SocialDraftBatch,
     SocialDraftRequest,
     WalmartImportRequest,
+    WalmartDraftGenerateRequest,
     WalmartInventorySyncRequest,
 )
 from app.reports import (
@@ -65,6 +66,8 @@ from app.store_sync import StorePageSyncer
 from app.walmart import (
     WalmartApiError,
     WalmartMarketplaceClient,
+    build_walmart_catalog_query,
+    build_walmart_draft,
     build_inventory_feed,
     build_offer_match_preview,
 )
@@ -88,6 +91,12 @@ walmart_sync_status: dict[str, Any] = {
     "configured": walmart_client.configured,
     "last_submission": None,
 }
+walmart_draft_status: dict[str, Any] = {
+    "status": "not_run",
+    "generated": 0,
+    "message": "Walmart API draft staging has not run yet.",
+    "last_attempt_at": None,
+}
 app = FastAPI(title=settings.app_name)
 logger = logging.getLogger(__name__)
 
@@ -108,6 +117,10 @@ def health() -> dict[str, Any]:
         "ebay_sync": ebay_sync_status,
         "store_sync": store_syncer.last_status,
         "walmart_sync": walmart_sync_status,
+        "walmart_drafts": {
+            **walmart_draft_status,
+            "stored": repository.walmart_draft_summary(),
+        },
     }
 
 
@@ -257,6 +270,13 @@ async def _startup_inventory_refresh() -> None:
     if settings.sync_ebay_api_on_startup and _has_ebay_sync_credentials():
         api_status = await _sync_ebay_api_inventory()
     if api_status and api_status.get("status") == "ok":
+        if settings.walmart_stage_drafts_on_startup and walmart_client.configured:
+            try:
+                await _generate_walmart_drafts(
+                    WalmartDraftGenerateRequest(sync_ebay_first=False)
+                )
+            except Exception as exc:
+                logger.warning("Walmart API draft staging failed at startup: %s", exc)
         return
     if settings.sync_store_page_on_startup:
         await store_syncer.sync()
@@ -375,6 +395,93 @@ async def _prepare_walmart_import(
     preview["blocked"] = preview["total"] - preview["ready"]
     preview["catalog_verification"] = "completed"
     return preview
+
+
+async def _generate_walmart_drafts(
+    draft_request: WalmartDraftGenerateRequest,
+) -> dict[str, Any]:
+    global walmart_draft_status
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    ebay_refresh: dict[str, Any] | None = None
+    if draft_request.sync_ebay_first:
+        ebay_refresh = await _sync_ebay_api_inventory()
+        if ebay_refresh.get("status") != "ok":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": "The eBay API refresh did not complete, so Walmart drafts were not changed.",
+                    "ebay_sync": ebay_refresh,
+                },
+            )
+
+    items = repository.ebay_items(
+        draft_request.skus,
+        limit=draft_request.max_items,
+        include_inactive=False,
+    )
+    if not items:
+        raise HTTPException(status_code=422, detail="No active eBay API listings were available to stage.")
+
+    semaphore = asyncio.Semaphore(4)
+
+    async def stage_item(item: InventoryItem) -> dict[str, Any]:
+        query = build_walmart_catalog_query(item)
+        catalog_result: dict[str, Any] = {
+            "status": "not_requested",
+            "query": query,
+            "total_candidates": 0,
+            "candidates": [],
+        }
+        lookup_error: str | None = None
+        if draft_request.search_walmart_catalog:
+            if not walmart_client.configured:
+                lookup_error = "Walmart Marketplace API credentials are not configured."
+                catalog_result["status"] = "lookup_failed"
+            else:
+                try:
+                    async with semaphore:
+                        catalog_result = await walmart_client.search_catalog_by_query(
+                            query,
+                            limit=draft_request.catalog_candidates_per_item,
+                        )
+                except WalmartApiError as exc:
+                    lookup_error = str(exc)
+                    catalog_result = {
+                        "status": "lookup_failed",
+                        "query": query,
+                        "total_candidates": 0,
+                        "candidates": [],
+                    }
+        return build_walmart_draft(item, catalog_result, lookup_error=lookup_error)
+
+    drafts = await asyncio.gather(*(stage_item(item) for item in items))
+    stored = repository.upsert_walmart_drafts(drafts)
+    catalog_counts: dict[str, int] = {}
+    missing_identifier = 0
+    for draft in drafts:
+        catalog_status = str(draft["catalog_status"])
+        catalog_counts[catalog_status] = catalog_counts.get(catalog_status, 0) + 1
+        if "product_identifier" in draft["missing_fields"]:
+            missing_identifier += 1
+
+    walmart_draft_status = {
+        "status": "staged",
+        "generated": stored,
+        "catalog_status": catalog_counts,
+        "missing_identifier": missing_identifier,
+        "message": (
+            "Stored API-enriched drafts in the Render database. "
+            "No Walmart item or inventory feed was submitted."
+        ),
+        "last_attempt_at": attempted_at,
+    }
+    return {
+        **walmart_draft_status,
+        "ebay_sync": ebay_refresh,
+        "storage": "render_database",
+        "walmart_feed_submitted": False,
+        "drafts": drafts,
+    }
 
 
 def _walmart_http_error(exc: WalmartApiError) -> HTTPException:
@@ -704,6 +811,47 @@ async def walmart_status(
         except WalmartApiError as exc:
             raise _walmart_http_error(exc) from exc
     return status
+
+
+@app.get("/walmart/drafts/summary")
+def walmart_drafts_summary() -> dict[str, Any]:
+    return {
+        "status": walmart_draft_status,
+        "stored": repository.walmart_draft_summary(),
+        "storage": "render_database",
+        "walmart_feed_submitted": False,
+        "note": (
+            "Walmart Marketplace APIs do not expose Seller Center draft creation. "
+            "These API-enriched records remain staged until a separate confirmed publish request."
+        ),
+    }
+
+
+@app.get("/walmart/drafts")
+def walmart_drafts(
+    request: Request,
+    sku: str | None = None,
+    limit: int = 200,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    drafts = repository.walmart_drafts([sku] if sku else None, limit=limit)
+    return {
+        "total": len(drafts),
+        "storage": "render_database",
+        "walmart_feed_submitted": False,
+        "drafts": drafts,
+    }
+
+
+@app.post("/walmart/drafts/generate")
+async def generate_walmart_drafts(
+    draft_request: WalmartDraftGenerateRequest,
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    return await _generate_walmart_drafts(draft_request)
 
 
 @app.post("/walmart/import/preview")
