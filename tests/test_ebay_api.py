@@ -7,6 +7,26 @@ import app.ebay as ebay_module
 from app.ebay import EbayClient
 
 
+def test_ebay_client_preserves_walmart_identifiers_and_package_weight():
+    product_specifics = EbayClient._sell_product_identifiers(
+        {
+            "brand": "Samsung",
+            "mpn": "SM-S931U",
+            "upc": ["887276900123"],
+        }
+    )
+    package_specifics = EbayClient._sell_package_specifics(
+        {"packageWeightAndSize": {"weight": {"value": 24, "unit": "OUNCE"}}}
+    )
+
+    assert product_specifics == {
+        "Brand": "Samsung",
+        "MPN": "SM-S931U",
+        "UPC": "887276900123",
+    }
+    assert package_specifics == {"Shipping Weight": "24 oz"}
+
+
 class FakeAsyncClient:
     def __init__(self, handler, *args, **kwargs):
         self.handler = handler

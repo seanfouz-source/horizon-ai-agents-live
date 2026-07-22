@@ -274,6 +274,8 @@ class EbayClient:
             str(key): ", ".join(value) if isinstance(value, list) else str(value)
             for key, value in aspects.items()
         }
+        item_specifics.update(self._sell_product_identifiers(product))
+        item_specifics.update(self._sell_package_specifics(raw_item))
         image_urls = self._image_urls_from_sell_product(product)
         item_id = str(raw_item.get("sku") or "")
 
@@ -433,12 +435,67 @@ class EbayClient:
                 value = str(aspect.get("value") or "").strip()
                 if name and value:
                     item_specifics[name] = value
-        for field in ("brand", "color", "conditionId", "categoryId", "listingMarketplaceId"):
+        direct_fields = {
+            "brand": "Brand",
+            "color": "Color",
+            "gtin": "GTIN",
+            "upc": "UPC",
+            "ean": "EAN",
+            "isbn": "ISBN",
+            "mpn": "MPN",
+            "conditionId": "conditionId",
+            "categoryId": "categoryId",
+            "listingMarketplaceId": "listingMarketplaceId",
+        }
+        for field, label in direct_fields.items():
             value = raw_item.get(field)
             if value:
-                item_specifics[field] = str(value)
+                if isinstance(value, list):
+                    clean_values = [str(part).strip() for part in value if str(part).strip()]
+                    if clean_values:
+                        item_specifics[label] = clean_values[0]
+                else:
+                    item_specifics[label] = str(value)
         item_specifics.update(EbayClient._browse_shipping_specifics(raw_item))
         return item_specifics
+
+    @staticmethod
+    def _sell_product_identifiers(product: dict[str, Any]) -> dict[str, str]:
+        identifiers: dict[str, str] = {}
+        fields = {
+            "brand": "Brand",
+            "mpn": "MPN",
+            "gtin": "GTIN",
+            "upc": "UPC",
+            "ean": "EAN",
+            "isbn": "ISBN",
+        }
+        for field, label in fields.items():
+            value = product.get(field)
+            if isinstance(value, list):
+                clean_values = [str(part).strip() for part in value if str(part).strip()]
+                if clean_values:
+                    identifiers[label] = clean_values[0]
+            elif value is not None and str(value).strip():
+                identifiers[label] = str(value).strip()
+        return identifiers
+
+    @staticmethod
+    def _sell_package_specifics(raw_item: dict[str, Any]) -> dict[str, str]:
+        package = raw_item.get("packageWeightAndSize")
+        if not isinstance(package, dict):
+            return {}
+        weight = package.get("weight")
+        if not isinstance(weight, dict) or weight.get("value") is None:
+            return {}
+        unit = str(weight.get("unit") or "POUND").strip().lower()
+        unit_labels = {
+            "pound": "lb",
+            "ounce": "oz",
+            "kilogram": "kg",
+            "gram": "g",
+        }
+        return {"Shipping Weight": f"{weight['value']} {unit_labels.get(unit, unit)}"}
 
     @staticmethod
     def _browse_shipping_specifics(raw_item: dict[str, Any]) -> dict[str, str]:

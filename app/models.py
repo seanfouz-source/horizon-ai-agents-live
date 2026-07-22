@@ -39,6 +39,36 @@ class EbayStoreImportRequest(BaseModel):
     max_pages: int = Field(default=1, ge=1, le=10)
 
 
+WalmartProductIdType = Literal["GTIN", "UPC", "EAN", "ISBN"]
+
+
+class WalmartItemOverride(BaseModel):
+    product_id_type: WalmartProductIdType | None = None
+    product_id: str | None = None
+    shipping_weight_lbs: float | None = Field(default=None, gt=0)
+    condition: str | None = None
+    price: float | None = Field(default=None, gt=0)
+    quantity: int | None = Field(default=None, ge=0)
+    main_image_url: str | None = None
+
+
+class WalmartImportRequest(BaseModel):
+    skus: list[str] = Field(default_factory=list)
+    overrides: dict[str, WalmartItemOverride] = Field(default_factory=dict)
+    max_items: int = Field(default=200, ge=1, le=200)
+    sync_ebay_first: bool = False
+    verify_catalog: bool = False
+    confirm: bool = False
+
+
+class WalmartInventorySyncRequest(BaseModel):
+    skus: list[str] = Field(default_factory=list)
+    max_items: int = Field(default=200, ge=1, le=200)
+    sync_ebay_first: bool = True
+    include_zero_quantity: bool = True
+    confirm: bool = False
+
+
 class CustomerQuestion(BaseModel):
     message: str
     channel: Channel = "unknown"

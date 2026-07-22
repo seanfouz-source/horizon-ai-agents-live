@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     sync_ebay_api_on_startup: bool = True
     sync_store_page_on_startup: bool = True
     sync_inventory_before_social_posts: bool = True
+    walmart_client_id: str | None = None
+    walmart_client_secret: str | None = None
+    walmart_api_base_url: str = "https://marketplace.walmartapis.com"
+    walmart_service_name: str = "Walmart Marketplace"
+    walmart_market: str = "us"
+    walmart_channel_type: str | None = None
+    walmart_default_shipping_weight_lbs: float | None = None
     seed_inventory_csv: Path | None = BASE_DIR / "data" / "exactspec_public_store.csv"
     public_base_url: str = "https://horizon-ai-agents.onrender.com"
     database_path: Path = BASE_DIR / "data" / "horizon_agents.db"

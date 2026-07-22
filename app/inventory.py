@@ -315,6 +315,38 @@ class InventoryRepository:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
+    def ebay_items(
+        self,
+        skus: Iterable[str] | None = None,
+        *,
+        limit: int = 200,
+        include_inactive: bool = False,
+    ) -> list[InventoryItem]:
+        selected_skus = [str(sku).strip() for sku in (skus or []) if str(sku).strip()]
+        where = ["(sku LIKE 'EBAY-%' OR source LIKE 'ebay-%')"]
+        params: list[object] = []
+        if not include_inactive:
+            where.append("quantity > 0")
+            where.append(
+                "(listing_status IS NULL OR upper(listing_status) IN ('ACTIVE', 'IN_STOCK', 'PUBLISHED', 'LIVE'))"
+            )
+        if selected_skus:
+            where.append(f"sku IN ({', '.join('?' for _ in selected_skus)})")
+            params.extend(selected_skus)
+        params.append(max(1, min(limit, 200)))
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM inventory_items
+                WHERE {' AND '.join(where)}
+                ORDER BY updated_at DESC, quantity DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._from_row(row) for row in rows]
+
     def social_post_count_for_day(self, scheduled_day: date | str) -> int:
         day = scheduled_day.isoformat() if isinstance(scheduled_day, date) else str(scheduled_day)[:10]
         with self.connect() as connection:

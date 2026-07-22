@@ -57,6 +57,18 @@ services:
         sync: false
       - key: EBAY_OAUTH_SCOPES
         value: https://api.ebay.com/oauth/api_scope
+      - key: WALMART_CLIENT_ID
+        sync: false
+      - key: WALMART_CLIENT_SECRET
+        sync: false
+      - key: WALMART_API_BASE_URL
+        value: https://marketplace.walmartapis.com
+      - key: WALMART_MARKET
+        value: us
+      - key: WALMART_SERVICE_NAME
+        value: Walmart Marketplace
+      - key: WALMART_CHANNEL_TYPE
+        sync: false
       - key: METRICOOL_DAILY_POST_LIMIT
         value: "2"
       - key: METRICOOL_MORNING_POST_TIME

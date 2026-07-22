@@ -52,6 +52,10 @@ This is a starter agent hub for promoting an eBay store and answering product qu
 - `POST /inventory/import/ebay-store-page` imports public listing cards from an eBay store URL.
 - `POST /inventory/sync/ebay` syncs active seller listings from the eBay API when `EBAY_ACCESS_TOKEN` is set.
 - `POST /inventory/sync/store-page` refreshes from the configured default eBay store URL only as a fallback.
+- `POST /walmart/import/preview` validates eBay listings for Walmart without publishing them.
+- `POST /walmart/import/submit` submits confirmed, catalog-matched listings to Walmart Marketplace.
+- `GET /walmart/feeds/{feed_id}` returns Walmart feed and item-level processing results.
+- `POST /walmart/inventory/sync` copies eBay quantities to already-created Walmart SKUs.
 - `POST /webhooks/manychat` answers Manychat Dynamic Block or External Request calls.
 - `POST /webhooks/zapier/customer-question` returns a JSON answer for Zapier.
 - `POST /webhooks/zapier/social-drafts` creates Facebook, Instagram, and TikTok post drafts.
@@ -202,6 +206,80 @@ eBay API token is invalid or eBay does not return data, the app tries the public
 store-page fallback and includes `inventory_refresh_*`, `ebay_sync_*`, and
 `store_sync_*` fields in Zapier responses so the Zap can show whether fresh
 listing photos were used or cached inventory was used.
+
+## eBay To Walmart Marketplace
+
+The Walmart bridge uses Walmart's OAuth client-credentials flow and the
+`MP_ITEM_MATCH` 4.2 offer feed. This is the safest first path for phones and
+tablets that already exist in Walmart's catalog: Walmart reuses its catalog
+content while this service supplies the seller SKU, product identifier, price,
+condition, shipping weight, and condition image when required.
+
+Add these secret environment variables to the `horizon-ai-agents` Render web
+service. Do not commit their values:
+
+```text
+WALMART_CLIENT_ID
+WALMART_CLIENT_SECRET
+```
+
+The blueprint already defines the production API URL, US market, service name,
+and optional `WALMART_CHANNEL_TYPE`. The channel type can remain blank unless
+Walmart assigned one during onboarding. Confirm authentication without
+publishing anything:
+
+```text
+GET /walmart/status?test_auth=true&secret=YOUR_WEBHOOK_SHARED_SECRET
+```
+
+Walmart requires a UPC/GTIN/EAN/ISBN and packaged shipping weight for every
+offer-by-match listing. The live eBay API importer preserves those fields when
+eBay returns them. You can provide missing values as per-SKU overrides during a
+preview; overrides are never written back to eBay:
+
+```json
+{
+  "sync_ebay_first": true,
+  "verify_catalog": true,
+  "skus": ["EBAY-366419891578"],
+  "overrides": {
+    "EBAY-366419891578": {
+      "product_id_type": "UPC",
+      "product_id": "123456789012",
+      "shipping_weight_lbs": 1.25,
+      "condition": "Open Box"
+    }
+  }
+}
+```
+
+Send that body to `POST /walmart/import/preview` first. The response separates
+`ready` and `blocked` items and reports each missing field. Start with one canary
+SKU. After reviewing the preview, send the same body to
+`POST /walmart/import/submit` with `"confirm": true`. The submit endpoint runs a
+live Walmart catalog check again and only sends items that resolve to an
+existing published Walmart catalog item.
+
+The submission returns a `feed_id`. Check
+`GET /walmart/feeds/{feed_id}?include_details=true` until Walmart reports
+`PROCESSED`, then review `itemsSucceeded`, `itemsFailed`, and the item ingestion
+errors. Once the offers exist, copy the current eBay quantities with:
+
+```json
+{
+  "skus": ["EBAY-366419891578"],
+  "sync_ebay_first": true,
+  "include_zero_quantity": true,
+  "confirm": true
+}
+```
+
+Send that body to `POST /walmart/inventory/sync`. Quantity updates overwrite
+Walmart's current quantity, including zero for ended eBay listings, so this
+endpoint also requires explicit confirmation. Full `MP_ITEM` creation for
+products absent from Walmart's catalog is intentionally blocked until all
+category-specific compliance attributes are supplied; the preview identifies
+those non-matches instead of inventing regulatory or product data.
 
 ## eBay Store URL Workaround
 

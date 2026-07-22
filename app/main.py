@@ -41,6 +41,8 @@ from app.models import (
     SlowMoverOutreachRequest,
     SocialDraftBatch,
     SocialDraftRequest,
+    WalmartImportRequest,
+    WalmartInventorySyncRequest,
 )
 from app.reports import (
     MetricoolReportError,
@@ -60,6 +62,12 @@ from app.report_email import (
     send_message_from_settings,
 )
 from app.store_sync import StorePageSyncer
+from app.walmart import (
+    WalmartApiError,
+    WalmartMarketplaceClient,
+    build_inventory_feed,
+    build_offer_match_preview,
+)
 
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -67,12 +75,18 @@ GMAIL_OAUTH_STATE_MAX_AGE_SECONDS = 15 * 60
 settings = get_settings()
 repository = InventoryRepository(settings.resolved_database_path)
 store_syncer = StorePageSyncer(settings, repository)
+walmart_client = WalmartMarketplaceClient(settings)
 ebay_sync_status: dict[str, Any] = {
     "source": "ebay-api",
     "status": "not_run",
     "imported": 0,
     "message": "eBay API sync has not run yet.",
     "last_attempt_at": None,
+}
+walmart_sync_status: dict[str, Any] = {
+    "status": "not_run",
+    "configured": walmart_client.configured,
+    "last_submission": None,
 }
 app = FastAPI(title=settings.app_name)
 logger = logging.getLogger(__name__)
@@ -93,6 +107,7 @@ def health() -> dict[str, Any]:
         "service": settings.app_name,
         "ebay_sync": ebay_sync_status,
         "store_sync": store_syncer.last_status,
+        "walmart_sync": walmart_sync_status,
     }
 
 
@@ -270,6 +285,74 @@ def _has_ebay_sync_credentials() -> bool:
         str(getattr(settings, field, "") or "").strip()
         for field in ("ebay_client_id", "ebay_client_secret")
     )
+
+
+async def _prepare_walmart_import(
+    import_request: WalmartImportRequest,
+    *,
+    force_verify_catalog: bool = False,
+) -> dict[str, Any]:
+    ebay_refresh: dict[str, Any] | None = None
+    if import_request.sync_ebay_first:
+        ebay_refresh = await _sync_ebay_api_inventory()
+
+    items = repository.ebay_items(
+        import_request.skus,
+        limit=import_request.max_items,
+        include_inactive=False,
+    )
+    preview = build_offer_match_preview(
+        items,
+        import_request.overrides,
+        default_shipping_weight_lbs=settings.walmart_default_shipping_weight_lbs,
+    )
+    preview["ebay_sync"] = ebay_refresh
+    preview["walmart_configured"] = walmart_client.configured
+
+    if not (force_verify_catalog or import_request.verify_catalog):
+        preview["catalog_verification"] = "not_requested"
+        return preview
+    if not walmart_client.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="WALMART_CLIENT_ID and WALMART_CLIENT_SECRET are required for catalog verification.",
+        )
+
+    for item_result in preview["items"]:
+        if not item_result["ready"]:
+            continue
+        resolved = item_result["resolved"]
+        try:
+            catalog = await walmart_client.search_catalog(
+                resolved["product_id_type"],
+                resolved["product_id"],
+            )
+        except WalmartApiError as exc:
+            raise _walmart_http_error(exc) from exc
+        item_result["catalog"] = catalog
+        if catalog.get("matched") is False:
+            item_result["ready"] = False
+            item_result["errors"].append(
+                "No published Walmart catalog match was found; this item needs a full MP_ITEM setup."
+            )
+        elif catalog.get("matched") is None:
+            item_result["warnings"].append(str(catalog.get("reason") or "Catalog match was not checked."))
+
+    ready_skus = {item["sku"] for item in preview["items"] if item["ready"]}
+    preview["payload"]["MPItem"] = [
+        entry
+        for entry in preview["payload"]["MPItem"]
+        if entry.get("Item", {}).get("sku") in ready_skus
+    ]
+    preview["ready"] = len(preview["payload"]["MPItem"])
+    preview["blocked"] = preview["total"] - preview["ready"]
+    preview["catalog_verification"] = "completed"
+    return preview
+
+
+def _walmart_http_error(exc: WalmartApiError) -> HTTPException:
+    status_code = 503 if exc.status_code in {401, 403, 429, 500, 502, 503, 504} else 502
+    return HTTPException(status_code=status_code, detail=str(exc))
 
 
 @app.get("/inventory/search", response_model=InventorySearchResult)
@@ -571,6 +654,183 @@ async def import_ebay_store_page(
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     return await store_syncer.sync(import_request.store_url, import_request.max_pages)
+
+
+@app.get("/walmart/status")
+async def walmart_status(
+    request: Request,
+    test_auth: bool = False,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    status: dict[str, Any] = {
+        "configured": walmart_client.configured,
+        "environment": "sandbox" if "sandbox" in walmart_client.base_url.lower() else "production",
+        "market": settings.walmart_market,
+        "offer_feed_type": "MP_ITEM_MATCH",
+        "offer_spec_version": "4.2",
+        "last_sync": walmart_sync_status,
+    }
+    if test_auth:
+        try:
+            status["authentication"] = await walmart_client.verify_credentials()
+        except WalmartApiError as exc:
+            raise _walmart_http_error(exc) from exc
+    return status
+
+
+@app.post("/walmart/import/preview")
+async def preview_walmart_import(
+    import_request: WalmartImportRequest,
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    return await _prepare_walmart_import(import_request)
+
+
+@app.post("/walmart/import/submit")
+async def submit_walmart_import(
+    import_request: WalmartImportRequest,
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    global walmart_sync_status
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    if not import_request.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true after reviewing /walmart/import/preview to submit a live Walmart offer feed.",
+        )
+    if not walmart_client.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="WALMART_CLIENT_ID and WALMART_CLIENT_SECRET are not configured.",
+        )
+
+    preview = await _prepare_walmart_import(import_request, force_verify_catalog=True)
+    if import_request.sync_ebay_first and (preview.get("ebay_sync") or {}).get("status") != "ok":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "The requested eBay refresh did not complete, so no Walmart offer feed was submitted.",
+                "ebay_sync": preview.get("ebay_sync"),
+            },
+        )
+    if not preview["ready"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "No eBay listings passed Walmart preflight.",
+                "preflight": preview,
+            },
+        )
+    try:
+        submission = await walmart_client.submit_offer_match_feed(preview["payload"])
+    except WalmartApiError as exc:
+        walmart_sync_status = {
+            "status": "failed",
+            "configured": walmart_client.configured,
+            "last_submission": None,
+            "message": str(exc),
+            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+        }
+        raise _walmart_http_error(exc) from exc
+
+    walmart_sync_status = {
+        "status": "submitted",
+        "configured": True,
+        "last_submission": submission,
+        "submitted_items": preview["ready"],
+        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return {
+        **submission,
+        "submitted_items": preview["ready"],
+        "blocked_items": preview["blocked"],
+        "items": preview["items"],
+        "next_step": f"Check /walmart/feeds/{submission['feed_id']} until the feed is PROCESSED.",
+    }
+
+
+@app.get("/walmart/feeds/{feed_id:path}")
+async def walmart_feed_status(
+    feed_id: str,
+    request: Request,
+    include_details: bool = True,
+    offset: int = 0,
+    limit: int = 50,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    try:
+        return await walmart_client.get_feed_status(
+            feed_id,
+            include_details=include_details,
+            offset=offset,
+            limit=limit,
+        )
+    except WalmartApiError as exc:
+        raise _walmart_http_error(exc) from exc
+
+
+@app.post("/walmart/inventory/sync")
+async def sync_walmart_inventory(
+    sync_request: WalmartInventorySyncRequest,
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    global walmart_sync_status
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    if not sync_request.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true to overwrite Walmart inventory quantities with the current eBay snapshot.",
+        )
+    if not walmart_client.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="WALMART_CLIENT_ID and WALMART_CLIENT_SECRET are not configured.",
+        )
+
+    ebay_refresh: dict[str, Any] | None = None
+    if sync_request.sync_ebay_first:
+        ebay_refresh = await _sync_ebay_api_inventory()
+        if ebay_refresh.get("status") != "ok":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": "The eBay refresh did not complete, so Walmart quantities were not changed.",
+                    "ebay_sync": ebay_refresh,
+                },
+            )
+
+    items = repository.ebay_items(
+        sync_request.skus,
+        limit=sync_request.max_items,
+        include_inactive=sync_request.include_zero_quantity,
+    )
+    if not items:
+        raise HTTPException(status_code=422, detail="No eBay inventory rows matched the Walmart inventory sync request.")
+    payload = build_inventory_feed(items)
+    try:
+        submission = await walmart_client.submit_inventory_feed(payload)
+    except WalmartApiError as exc:
+        raise _walmart_http_error(exc) from exc
+
+    walmart_sync_status = {
+        "status": "inventory_submitted",
+        "configured": True,
+        "last_submission": submission,
+        "submitted_items": len(items),
+        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return {
+        **submission,
+        "submitted_items": len(items),
+        "ebay_sync": ebay_refresh,
+        "inventory": payload["Inventory"],
+    }
 
 
 @app.post("/agent/customer-answer", response_model=dict[str, Any])
