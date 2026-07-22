@@ -223,6 +223,33 @@ def gmail_oauth_callback(
 async def startup_inventory_sync() -> None:
     seed_inventory_if_empty(repository, settings.seed_inventory_csv)
     asyncio.create_task(_startup_inventory_refresh())
+    asyncio.create_task(_startup_walmart_auth_check())
+
+
+async def _startup_walmart_auth_check() -> None:
+    global walmart_sync_status
+    if not walmart_client.configured:
+        return
+    try:
+        authentication = await walmart_client.verify_credentials()
+    except WalmartApiError as exc:
+        logger.warning("Walmart Marketplace authentication check failed: %s", exc)
+        walmart_sync_status = {
+            "status": "authentication_failed",
+            "configured": True,
+            "authentication": {
+                "status": "failed",
+                "http_status": exc.status_code,
+            },
+            "last_submission": None,
+        }
+        return
+    walmart_sync_status = {
+        "status": "authenticated",
+        "configured": True,
+        "authentication": authentication,
+        "last_submission": None,
+    }
 
 
 async def _startup_inventory_refresh() -> None:
