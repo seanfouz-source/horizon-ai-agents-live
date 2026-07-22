@@ -72,6 +72,7 @@ from app.walmart import (
     build_inventory_feed,
     build_offer_match_preview,
 )
+from app.walmart_public_data import PUBLIC_CATALOG_IDENTIFIERS
 
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -546,17 +547,7 @@ async def _submit_unpublished_batch_once(batch_id: str) -> dict[str, Any]:
         and isinstance(draft.get("prepared_listing"), dict)
         and isinstance(draft["prepared_listing"].get("product_identifier"), dict)
     ]
-    verified_skus = [str(draft["sku"]) for draft in verified_drafts]
-    skipped_skus = [str(draft["sku"]) for draft in drafts if str(draft["sku"]) not in verified_skus]
-    if not verified_skus:
-        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
-            clean_batch_id,
-            status="no_verified_matches",
-            skipped_skus=skipped_skus,
-            error_message="No draft passed the exact-match safeguards; no Walmart feed was submitted.",
-        )
-        return walmart_unpublished_status
-
+    draft_skus = {str(draft["sku"]) for draft in drafts}
     overrides: dict[str, WalmartItemOverride] = {}
     for draft in verified_drafts:
         identifier = draft["prepared_listing"]["product_identifier"]
@@ -564,18 +555,40 @@ async def _submit_unpublished_batch_once(batch_id: str) -> dict[str, Any]:
             product_id_type=identifier["type"],
             product_id=identifier["value"],
         )
+    for sku, identifier in PUBLIC_CATALOG_IDENTIFIERS.items():
+        if sku not in draft_skus:
+            continue
+        overrides.setdefault(
+            sku,
+            WalmartItemOverride(
+                product_id_type=identifier["product_id_type"],
+                product_id=identifier["product_id"],
+            ),
+        )
+
+    candidate_skus = sorted(overrides)
+    skipped_skus = sorted(draft_skus - set(candidate_skus))
+    if not candidate_skus:
+        walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
+            clean_batch_id,
+            status="no_verified_matches",
+            skipped_skus=skipped_skus,
+            error_message="No draft had a verified public identifier; no Walmart feed was submitted.",
+        )
+        return walmart_unpublished_status
+
     preflight = await _prepare_walmart_import(
         WalmartImportRequest(
-            skus=verified_skus,
+            skus=candidate_skus,
             overrides=overrides,
-            max_items=len(verified_skus),
+            max_items=len(candidate_skus),
             sync_ebay_first=False,
             verify_catalog=True,
         ),
         force_verify_catalog=True,
     )
     ready_skus = [str(item["sku"]) for item in preflight["items"] if item.get("ready")]
-    skipped_skus = sorted(set(skipped_skus) | (set(verified_skus) - set(ready_skus)))
+    skipped_skus = sorted(set(skipped_skus) | (set(candidate_skus) - set(ready_skus)))
     if not ready_skus:
         walmart_unpublished_status = repository.upsert_walmart_unpublished_job(
             clean_batch_id,
