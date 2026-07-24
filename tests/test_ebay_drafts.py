@@ -53,6 +53,47 @@ def test_catalog_match_requires_model_storage_and_color():
     assert EbayClient._select_catalog_product(draft, [wrong_storage, exact]) == exact
 
 
+def test_browse_product_mapping_uses_only_product_stock_images():
+    candidate = EbayClient._browse_product_catalog_candidate(
+        {
+            "itemId": "v1|123|0",
+            "epid": "321",
+            "image": {"imageUrl": "https://i.ebayimg.com/images/g/seller/s-l1600.jpg"},
+        },
+        {
+            "title": "Seller listing title",
+            "product": {
+                "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue",
+                "brand": "Apple",
+                "image": {
+                    "imageUrl": "https://i.ebayimg.com/images/g/product/s-l1600.jpg"
+                },
+                "additionalImages": [
+                    {
+                        "imageUrl": "https://i.ebayimg.com/images/g/product-two/s-l1600.jpg"
+                    }
+                ],
+                "aspectGroups": [
+                    {
+                        "aspects": [
+                            {"name": "Color", "values": ["Sierra Blue"]},
+                            {"name": "Storage Capacity", "values": ["256 GB"]},
+                        ]
+                    }
+                ],
+            },
+        },
+    )
+
+    assert candidate is not None
+    assert candidate["imageSource"] == "EBAY_BROWSE_PRODUCT"
+    assert EbayClient._catalog_image_urls(candidate) == [
+        "https://i.ebayimg.com/images/g/product/s-l1600.jpg",
+        "https://i.ebayimg.com/images/g/product-two/s-l1600.jpg",
+    ]
+    assert "seller/s-l1600.jpg" not in str(candidate)
+
+
 class FakeDraftAsyncClient:
     calls: list[tuple[str, str, object]] = []
 
@@ -121,3 +162,98 @@ def test_confirmed_batch_creates_unpublished_offer_with_catalog_images(monkeypat
     ]
     assert not any("/publish" in path for _, path, _ in FakeDraftAsyncClient.calls)
 
+
+class FakeBrowseProductAsyncClient:
+    calls: list[tuple[str, str, object, str | None]] = []
+
+    def __init__(self, *args, **kwargs):
+        self.calls = []
+        FakeBrowseProductAsyncClient.calls = self.calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    async def get(self, path, params=None, headers=None):
+        authorization = (headers or {}).get("Authorization")
+        self.calls.append(("GET", path, params, authorization))
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/commerce/catalog/v1_beta/product_summary/search":
+            assert authorization == "Bearer user-token"
+            return httpx.Response(403, json={"errors": [{"message": "Access denied"}]}, request=request)
+        if path == "/buy/browse/v1/item_summary/search":
+            assert authorization == "Bearer application-token"
+            return httpx.Response(
+                200,
+                json={
+                    "itemSummaries": [
+                        {
+                            "itemId": "v1|123|0",
+                            "epid": "321",
+                            "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue",
+                        }
+                    ]
+                },
+                request=request,
+            )
+        if path == "/buy/browse/v1/item/v1|123|0":
+            assert authorization == "Bearer application-token"
+            return httpx.Response(
+                200,
+                json={
+                    "epid": "321",
+                    "product": {
+                        "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue",
+                        "brand": "Apple",
+                        "image": {
+                            "imageUrl": "https://i.ebayimg.com/images/g/product/s-l1600.jpg"
+                        },
+                        "aspectGroups": [
+                            {
+                                "aspects": [
+                                    {"name": "Color", "values": ["Sierra Blue"]},
+                                    {"name": "Storage Capacity", "values": ["256 GB"]},
+                                ]
+                            }
+                        ],
+                    },
+                },
+                request=request,
+            )
+        raise AssertionError(f"Unexpected GET path: {path}")
+
+    async def post(self, path, data=None, content=None, json=None, headers=None):
+        payload = json if json is not None else content if content is not None else data
+        self.calls.append(("POST", path, payload, (headers or {}).get("Authorization")))
+        request = httpx.Request("POST", f"https://api.ebay.com{path}")
+        if path == "/identity/v1/oauth2/token":
+            return httpx.Response(
+                200,
+                json={"access_token": "application-token"},
+                request=request,
+            )
+        raise AssertionError(f"Unexpected POST path: {path}")
+
+
+def test_catalog_permission_falls_back_to_browse_product_stock_image(monkeypatch):
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", FakeBrowseProductAsyncClient)
+    settings = _settings()
+    settings.ebay_client_id = "client-id"
+    settings.ebay_client_secret = "client-secret"
+    settings.ebay_application_oauth_scopes = "https://api.ebay.com/oauth/api_scope"
+    draft = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 48
+    )
+
+    results = asyncio.run(
+        EbayClient(settings).prepare_unpublished_drafts([draft], confirm=False)
+    )
+
+    assert results[0]["status"] == "ready"
+    assert results[0]["selected_catalog_product"]["epid"] == "321"
+    assert results[0]["image_urls"] == [
+        "https://i.ebayimg.com/images/g/product/s-l1600.jpg"
+    ]
+    assert not any("/publish" in path for _, path, _, _ in FakeBrowseProductAsyncClient.calls)

@@ -27,6 +27,8 @@ class EbayClient:
         self.settings = settings
         self._configured_access_token = self._clean_access_token(settings.ebay_access_token)
         self._access_token = self._configured_access_token
+        self._application_access_token: str | None = None
+        self._catalog_access_denied = False
         if not self._access_token and not self._has_refresh_credentials() and not self._has_client_credentials():
             raise RuntimeError(
                 "EBAY_ACCESS_TOKEN, eBay OAuth refresh credentials, or EBAY_CLIENT_ID/EBAY_CLIENT_SECRET "
@@ -215,20 +217,138 @@ class EbayClient:
         *,
         limit: int,
     ) -> list[dict[str, Any]]:
-        response = await self._get(
+        if not self._catalog_access_denied:
+            response = await self._get(
+                client,
+                "/commerce/catalog/v1_beta/product_summary/search",
+                params={
+                    "q": query,
+                    "category_id": category_id,
+                    "limit": max(1, min(limit, 50)),
+                },
+                headers=self._headers(),
+            )
+            if response.status_code not in {401, 403}:
+                response.raise_for_status()
+                payload = response.json()
+                products = payload.get("productSummaries") or []
+                return [product for product in products if isinstance(product, dict)]
+            self._catalog_access_denied = True
+            logger.info(
+                "eBay Catalog API denied this seller token; using Browse PRODUCT stock images."
+            )
+        return await self._search_browse_catalog_products(
             client,
-            "/commerce/catalog/v1_beta/product_summary/search",
-            params={
-                "q": query,
-                "category_id": category_id,
-                "limit": max(1, min(limit, 50)),
-            },
-            headers=self._headers(),
+            query,
+            category_id,
+            limit=limit,
         )
-        response.raise_for_status()
-        payload = response.json()
-        products = payload.get("productSummaries") or []
-        return [product for product in products if isinstance(product, dict)]
+
+    async def _search_browse_catalog_products(
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+        category_id: str,
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        seller_token = self._access_token
+        if not self._application_access_token:
+            self._application_access_token = await self._client_credentials_access_token(client)
+        if not self._application_access_token:
+            raise RuntimeError(
+                "EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are required for eBay Browse product images."
+            )
+
+        self._access_token = self._application_access_token
+        try:
+            search_response = await self._get(
+                client,
+                "/buy/browse/v1/item_summary/search",
+                params={
+                    "q": query,
+                    "category_ids": category_id,
+                    "limit": max(1, min(limit, 50)),
+                },
+                headers=self._headers(),
+            )
+            search_response.raise_for_status()
+            summaries = search_response.json().get("itemSummaries") or []
+            candidates: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for summary in summaries[: max(1, min(limit, 50))]:
+                if not isinstance(summary, dict) or not summary.get("itemId"):
+                    continue
+                detail_response = await self._get(
+                    client,
+                    f"/buy/browse/v1/item/{quote(str(summary['itemId']), safe='|')}",
+                    params={"fieldgroups": "PRODUCT"},
+                    headers=self._headers(),
+                )
+                if detail_response.status_code in {400, 404}:
+                    continue
+                detail_response.raise_for_status()
+                detail = detail_response.json()
+                candidate = self._browse_product_catalog_candidate(summary, detail)
+                if not candidate or not self._catalog_image_urls(candidate):
+                    continue
+                identity = "|".join(
+                    [
+                        str(candidate.get("epid") or ""),
+                        str(candidate.get("title") or ""),
+                        self._catalog_image_urls(candidate)[0],
+                    ]
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                candidates.append(candidate)
+            return candidates
+        finally:
+            self._access_token = seller_token
+
+    @staticmethod
+    def _browse_product_catalog_candidate(
+        summary: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        product = detail.get("product")
+        if not isinstance(product, dict):
+            return None
+        primary = product.get("image")
+        if not isinstance(primary, dict) or not primary.get("imageUrl"):
+            return None
+
+        aspects: list[dict[str, Any]] = []
+        for group in product.get("aspectGroups") or []:
+            if not isinstance(group, dict):
+                continue
+            for aspect in group.get("aspects") or []:
+                if not isinstance(aspect, dict):
+                    continue
+                name = str(aspect.get("name") or "").strip()
+                values = aspect.get("values")
+                if not isinstance(values, list):
+                    value = aspect.get("value")
+                    values = [value] if value else []
+                clean_values = [str(value).strip() for value in values if str(value).strip()]
+                if name and clean_values:
+                    aspects.append(
+                        {
+                            "localizedName": name,
+                            "localizedValues": clean_values,
+                        }
+                    )
+
+        return {
+            "epid": detail.get("epid") or summary.get("epid"),
+            "title": product.get("title") or detail.get("title") or summary.get("title"),
+            "brand": product.get("brand"),
+            "image": primary,
+            "additionalImages": product.get("additionalImages") or [],
+            "aspects": aspects,
+            "imageSource": "EBAY_BROWSE_PRODUCT",
+        }
 
     async def _fetch_sell_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         items: list[InventoryItem] = []
