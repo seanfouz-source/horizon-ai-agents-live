@@ -262,13 +262,14 @@ class EbayClient:
 
         self._access_token = self._application_access_token
         try:
+            search_limit = max(50, min(limit * 5, 200))
             search_response = await self._get(
                 client,
                 "/buy/browse/v1/item_summary/search",
                 params={
                     "q": query,
                     "category_ids": category_id,
-                    "limit": max(1, min(limit, 50)),
+                    "limit": search_limit,
                 },
                 headers=self._headers(),
             )
@@ -276,8 +277,12 @@ class EbayClient:
             summaries = search_response.json().get("itemSummaries") or []
             candidates: list[dict[str, Any]] = []
             seen: set[str] = set()
-            for summary in summaries[: max(1, min(limit, 50))]:
-                if not isinstance(summary, dict) or not summary.get("itemId"):
+            for summary in summaries[:search_limit]:
+                if (
+                    not isinstance(summary, dict)
+                    or not summary.get("itemId")
+                    or not summary.get("epid")
+                ):
                     continue
                 detail_response = await self._get(
                     client,
@@ -303,6 +308,8 @@ class EbayClient:
                     continue
                 seen.add(identity)
                 candidates.append(candidate)
+                if len(candidates) >= max(1, min(limit, 50)):
+                    break
             return candidates
         finally:
             self._access_token = seller_token
