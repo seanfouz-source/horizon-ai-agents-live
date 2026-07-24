@@ -53,6 +53,38 @@ def test_catalog_match_requires_model_storage_and_color():
     assert EbayClient._select_catalog_product(draft, [wrong_storage, exact]) == exact
 
 
+def test_catalog_match_requires_unlocked_network_and_can_use_same_variant_image_donor():
+    draft = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 48
+    )
+    exact_unlocked = _catalog_product(
+        "Apple iPhone 13 Pro Max 256GB Sierra Blue Unlocked",
+        epid="UNLOCKED-EPID",
+    )
+    exact_unlocked["image"] = {}
+    exact_unlocked["additionalImages"] = []
+    tmobile_image_donor = _catalog_product(
+        "Apple iPhone 13 Pro Max 256GB Sierra Blue T-Mobile",
+        epid="TMOBILE-EPID",
+    )
+
+    assert EbayClient._catalog_match(draft, tmobile_image_donor)["exact"] is False
+    assert EbayClient._catalog_match(draft, tmobile_image_donor)[
+        "missing_network_tokens"
+    ] == ["unlocked"]
+
+    selected = EbayClient._select_catalog_product(
+        draft,
+        [tmobile_image_donor, exact_unlocked],
+    )
+
+    assert selected is not None
+    assert selected["epid"] == "UNLOCKED-EPID"
+    assert selected["imageSourceEpid"] == "TMOBILE-EPID"
+    assert EbayClient._catalog_match(draft, selected)["exact"] is True
+    assert EbayClient._catalog_image_urls(selected)
+
+
 def test_browse_product_mapping_uses_only_product_stock_images():
     candidate = EbayClient._browse_product_catalog_candidate(
         {
@@ -63,7 +95,7 @@ def test_browse_product_mapping_uses_only_product_stock_images():
         {
             "title": "Seller listing title",
             "product": {
-                "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue",
+                "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue Unlocked",
                 "brand": "Apple",
                 "image": {
                     "imageUrl": "https://i.ebayimg.com/images/g/product/s-l1600.jpg"
@@ -192,7 +224,7 @@ class FakeBrowseProductAsyncClient:
                         {
                             "itemId": "v1|123|0",
                             "epid": "321",
-                            "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue",
+                            "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue Unlocked",
                         }
                     ]
                 },
@@ -205,7 +237,7 @@ class FakeBrowseProductAsyncClient:
                 json={
                     "epid": "321",
                     "product": {
-                        "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue",
+                        "title": "Apple iPhone 13 Pro Max 256GB Sierra Blue Unlocked",
                         "brand": "Apple",
                         "image": {
                             "imageUrl": "https://i.ebayimg.com/images/g/product/s-l1600.jpg"

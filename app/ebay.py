@@ -1452,15 +1452,18 @@ class EbayClient:
         ]
         storage_tokens = EbayClient._match_tokens(draft.storage)
         color_tokens = EbayClient._match_tokens(draft.color)
+        network_tokens = EbayClient._match_tokens(draft.network)
 
         missing_model = [token for token in model_tokens if token not in candidate_tokens]
         missing_storage = [token for token in storage_tokens if token not in candidate_tokens]
         missing_color = [token for token in color_tokens if token not in candidate_tokens]
-        exact = not (missing_model or missing_storage or missing_color)
+        missing_network = [token for token in network_tokens if token not in candidate_tokens]
+        exact = not (missing_model or missing_storage or missing_color or missing_network)
         score = (
             sum(6 for token in model_tokens if token in candidate_tokens)
             + sum(4 for token in storage_tokens if token in candidate_tokens)
             + sum(3 for token in color_tokens if token in candidate_tokens)
+            + sum(5 for token in network_tokens if token in candidate_tokens)
         )
         return {
             "exact": exact,
@@ -1468,6 +1471,7 @@ class EbayClient:
             "missing_model_tokens": missing_model,
             "missing_storage_tokens": missing_storage,
             "missing_color_tokens": missing_color,
+            "missing_network_tokens": missing_network,
         }
 
     @staticmethod
@@ -1475,6 +1479,50 @@ class EbayClient:
         draft: EbayDraftSpec,
         candidates: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
+        exact_candidates = [
+            candidate
+            for candidate in candidates
+            if EbayClient._catalog_match(draft, candidate)["exact"]
+        ]
+        exact_with_images = [
+            candidate
+            for candidate in exact_candidates
+            if EbayClient._catalog_image_urls(candidate)
+        ]
+        if exact_with_images:
+            return max(
+                exact_with_images,
+                key=lambda candidate: int(EbayClient._catalog_match(draft, candidate)["score"]),
+            )
+
+        if exact_candidates:
+            image_donors = [
+                candidate
+                for candidate in candidates
+                if EbayClient._catalog_image_urls(candidate)
+                and not EbayClient._catalog_match(draft, candidate)["missing_model_tokens"]
+                and not EbayClient._catalog_match(draft, candidate)["missing_storage_tokens"]
+                and not EbayClient._catalog_match(draft, candidate)["missing_color_tokens"]
+            ]
+            if image_donors:
+                exact_candidate = max(
+                    exact_candidates,
+                    key=lambda candidate: int(
+                        EbayClient._catalog_match(draft, candidate)["score"]
+                    ),
+                )
+                image_donor = max(
+                    image_donors,
+                    key=lambda candidate: int(
+                        EbayClient._catalog_match(draft, candidate)["score"]
+                    ),
+                )
+                selected = dict(exact_candidate)
+                selected["image"] = image_donor.get("image")
+                selected["additionalImages"] = image_donor.get("additionalImages") or []
+                selected["imageSourceEpid"] = image_donor.get("epid")
+                return selected
+
         candidates_with_images = [
             candidate
             for candidate in candidates
@@ -1516,6 +1564,7 @@ class EbayClient:
             "epid": candidate.get("epid"),
             "title": candidate.get("title"),
             "image_urls": EbayClient._catalog_image_urls(candidate),
+            "image_source_epid": candidate.get("imageSourceEpid"),
             "match": EbayClient._catalog_match(draft, candidate),
         }
 
