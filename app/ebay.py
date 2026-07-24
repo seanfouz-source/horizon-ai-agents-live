@@ -277,6 +277,11 @@ class EbayClient:
             summaries = search_response.json().get("itemSummaries") or []
             candidates: list[dict[str, Any]] = []
             seen: set[str] = set()
+            epid_summaries = 0
+            detail_responses = 0
+            product_containers = 0
+            product_images = 0
+            first_detail_keys: list[str] = []
             for summary in summaries[:search_limit]:
                 if (
                     not isinstance(summary, dict)
@@ -284,6 +289,7 @@ class EbayClient:
                     or not summary.get("epid")
                 ):
                     continue
+                epid_summaries += 1
                 detail_response = await self._get(
                     client,
                     f"/buy/browse/v1/item/{quote(str(summary['itemId']), safe='|')}",
@@ -294,9 +300,15 @@ class EbayClient:
                     continue
                 detail_response.raise_for_status()
                 detail = detail_response.json()
+                detail_responses += 1
+                if not first_detail_keys and isinstance(detail, dict):
+                    first_detail_keys = sorted(str(key) for key in detail)[:40]
+                if isinstance(detail.get("product"), dict):
+                    product_containers += 1
                 candidate = self._browse_product_catalog_candidate(summary, detail)
                 if not candidate or not self._catalog_image_urls(candidate):
                     continue
+                product_images += 1
                 identity = "|".join(
                     [
                         str(candidate.get("epid") or ""),
@@ -310,6 +322,17 @@ class EbayClient:
                 candidates.append(candidate)
                 if len(candidates) >= max(1, min(limit, 50)):
                     break
+            logger.info(
+                "eBay Browse PRODUCT diagnostics: summaries=%s epid_summaries=%s "
+                "detail_responses=%s product_containers=%s product_images=%s "
+                "first_detail_keys=%s",
+                len(summaries),
+                epid_summaries,
+                detail_responses,
+                product_containers,
+                product_images,
+                first_detail_keys,
+            )
             return candidates
         finally:
             self._access_token = seller_token
