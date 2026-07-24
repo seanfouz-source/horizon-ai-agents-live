@@ -125,8 +125,34 @@ class EbayClient:
                             None,
                         )
                         if unpublished_offer:
+                            inventory_response = await self._get(
+                                client,
+                                (
+                                    "/sell/inventory/v1/inventory_item/"
+                                    f"{quote(draft.sku, safe='')}"
+                                ),
+                                headers=self._headers(),
+                            )
+                            saved_image_urls: list[str] = []
+                            if inventory_response.status_code == 200:
+                                inventory_payload = inventory_response.json()
+                                raw_image_urls = (
+                                    (inventory_payload.get("product") or {}).get("imageUrls")
+                                    or []
+                                )
+                                if isinstance(raw_image_urls, list):
+                                    saved_image_urls = [
+                                        str(url)
+                                        for url in self._dedupe_urls(raw_image_urls)
+                                        if str(url).lower().startswith("https://")
+                                    ]
                             result["offer_id"] = unpublished_offer.get("offerId")
                             result["offer_created"] = True
+                            result["image_urls"] = saved_image_urls
+                            result["image_count"] = len(saved_image_urls)
+                            result["inventory_item_verified"] = (
+                                inventory_response.status_code == 200
+                            )
                             result["status"] = "existing_unpublished"
                             result["message"] = "An unpublished offer already exists for this SKU."
                             results.append(result)

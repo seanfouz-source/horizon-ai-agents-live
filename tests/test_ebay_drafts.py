@@ -281,6 +281,18 @@ class FakeExistingDraftAsyncClient:
                 json={"offers": [{"offerId": "EXISTING-OFFER-1"}]},
                 request=request,
             )
+        if path.startswith("/sell/inventory/v1/inventory_item/"):
+            return httpx.Response(
+                200,
+                json={
+                    "product": {
+                        "imageUrls": [
+                            "https://i.ebayimg.com/images/g/catalog/s-l1600.jpg"
+                        ]
+                    }
+                },
+                request=request,
+            )
         raise AssertionError(f"Existing draft unexpectedly searched catalog: {path}")
 
 
@@ -361,8 +373,15 @@ def test_existing_unpublished_offer_is_verified_before_catalog_lookup(monkeypatc
     assert results[0]["status"] == "existing_unpublished"
     assert results[0]["offer_id"] == "EXISTING-OFFER-1"
     assert results[0]["published"] is False
+    assert results[0]["inventory_item_verified"] is True
+    assert results[0]["image_count"] == 1
     assert FakeExistingDraftAsyncClient.calls == [
-        ("GET", "/sell/inventory/v1/offer", {"sku": draft.sku, "limit": 10})
+        ("GET", "/sell/inventory/v1/offer", {"sku": draft.sku, "limit": 10}),
+        (
+            "GET",
+            f"/sell/inventory/v1/inventory_item/{draft.sku}",
+            None,
+        ),
     ]
 
 
