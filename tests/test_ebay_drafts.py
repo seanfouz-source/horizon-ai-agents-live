@@ -41,6 +41,35 @@ def test_inventory_sheet_batch_contains_only_the_69_missing_variants():
     assert all(len(draft.title) <= 80 for draft in drafts)
 
 
+def test_manual_images_cover_all_previously_blocked_sheet_rows():
+    drafts_by_row = {
+        draft.sheet_row: draft for draft in inventory_sheet_missing_drafts()
+    }
+    manual_rows = {
+        *range(2, 12),
+        12,
+        14,
+        15,
+        17,
+        19,
+        20,
+        *range(25, 38),
+        40,
+        43,
+        46,
+        67,
+        72,
+    }
+
+    assert {row for row, draft in drafts_by_row.items() if draft.manual_image_urls} == manual_rows
+    assert all(
+        url.startswith("https://")
+        for row in manual_rows
+        for url in drafts_by_row[row].manual_image_urls
+    )
+    assert all(drafts_by_row[row].manual_image_source for row in manual_rows)
+
+
 def test_catalog_match_requires_model_storage_and_color():
     draft = next(
         item for item in inventory_sheet_missing_drafts() if item.sheet_row == 48
@@ -230,10 +259,74 @@ class FakeEmptyCatalogAsyncClient:
         raise AssertionError(f"Unexpected GET path: {path}")
 
 
+class FakeManualImageAsyncClient:
+    calls: list[tuple[str, str, object]] = []
+
+    def __init__(self, *args, **kwargs):
+        self.calls = []
+        FakeManualImageAsyncClient.calls = self.calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    async def get(self, path, params=None, headers=None):
+        self.calls.append(("GET", path, params))
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/offer":
+            return httpx.Response(200, json={"offers": []}, request=request)
+        raise AssertionError(f"Manual image draft unexpectedly searched catalog: {path}")
+
+    async def put(self, path, json=None, headers=None):
+        self.calls.append(("PUT", path, json))
+        request = httpx.Request("PUT", f"https://api.ebay.com{path}")
+        return httpx.Response(204, request=request)
+
+    async def post(self, path, data=None, content=None, json=None, headers=None):
+        payload = json if json is not None else content if content is not None else data
+        self.calls.append(("POST", path, payload))
+        request = httpx.Request("POST", f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/offer":
+            return httpx.Response(201, json={"offerId": "MANUAL-OFFER-1"}, request=request)
+        raise AssertionError(f"Unexpected POST path: {path}")
+
+
+def test_manual_verified_image_creates_offer_without_catalog_id(monkeypatch):
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", FakeManualImageAsyncClient)
+    draft = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 2
+    )
+
+    results = asyncio.run(
+        EbayClient(_settings()).prepare_unpublished_drafts([draft], confirm=True)
+    )
+
+    assert results[0]["status"] == "created_unpublished"
+    assert results[0]["offer_id"] == "MANUAL-OFFER-1"
+    assert results[0]["published"] is False
+    assert results[0]["image_source"] == "APPLE_OFFICIAL"
+    put_payload = next(
+        payload
+        for method, path, payload in FakeManualImageAsyncClient.calls
+        if method == "PUT" and "/inventory_item/" in path
+    )
+    assert put_payload["product"]["imageUrls"] == list(draft.manual_image_urls)
+    assert "epid" not in put_payload["product"]
+    assert not any(
+        "/commerce/catalog/" in path
+        for _, path, _ in FakeManualImageAsyncClient.calls
+    )
+    assert not any(
+        "/publish" in path for _, path, _ in FakeManualImageAsyncClient.calls
+    )
+
+
 def test_empty_successful_catalog_response_blocks_item_without_crashing(monkeypatch):
     monkeypatch.setattr(ebay_module.httpx, "AsyncClient", FakeEmptyCatalogAsyncClient)
     draft = next(
-        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 35
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 38
     )
 
     results = asyncio.run(

@@ -5,6 +5,186 @@ from dataclasses import asdict, dataclass
 
 EBAY_INVENTORY_SHEET_BATCH_ID = "walmart-sheet-missing-2026-07-24"
 
+APPLE_IPAD_IMAGE = (
+    "https://store.storeimages.cdn-apple.com/1/as-images.apple.com/is/"
+    "ipad-finish-select-202503-{color}-wifi?wid=1200&hei=1200&fmt=jpeg&qlt=90"
+)
+MANUAL_DRAFT_IMAGES: dict[int, tuple[tuple[str, ...], str]] = {
+    2: ((APPLE_IPAD_IMAGE.format(color="blue"),), "APPLE_OFFICIAL"),
+    3: ((APPLE_IPAD_IMAGE.format(color="silver"),), "APPLE_OFFICIAL"),
+    4: ((APPLE_IPAD_IMAGE.format(color="yellow"),), "APPLE_OFFICIAL"),
+    5: ((APPLE_IPAD_IMAGE.format(color="pink"),), "APPLE_OFFICIAL"),
+    6: ((APPLE_IPAD_IMAGE.format(color="blue"),), "APPLE_OFFICIAL"),
+    7: ((APPLE_IPAD_IMAGE.format(color="silver"),), "APPLE_OFFICIAL"),
+    8: ((APPLE_IPAD_IMAGE.format(color="pink"),), "APPLE_OFFICIAL"),
+    9: ((APPLE_IPAD_IMAGE.format(color="blue"),), "APPLE_OFFICIAL"),
+    10: ((APPLE_IPAD_IMAGE.format(color="silver"),), "APPLE_OFFICIAL"),
+    11: ((APPLE_IPAD_IMAGE.format(color="pink"),), "APPLE_OFFICIAL"),
+    12: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/"
+            "sm-a366uzkaxaa/gallery/us-galaxy-a36-5g-sm-a366-577014-"
+            "sm-a366uzkaxaa-550736693",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    14: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/"
+            "sm-s931udbaxaa/gallery/us-galaxy-s25-s931-551170-"
+            "sm-s931udbaxaa-547068504",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    15: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/"
+            "sm-s931uzsaxaa/gallery/us-galaxy-s25-s931-551170-"
+            "sm-s931uzsaxaa-547069587",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    17: (
+        (
+            "https://p1-ofp.static.pub/medias/"
+            "28260394073_Moto_g_2026_Slipstream_202603060441051774329127205.png",
+        ),
+        "MOTOROLA_OFFICIAL",
+    ),
+    19: (
+        ("https://i.ebayimg.com/images/g/NPEAAOSwiFJj4pM1/s-l1200.jpg",),
+        "EBAY_CATALOG_MODEL_COLOR",
+    ),
+    20: (
+        ("https://i.ebayimg.com/images/g/G~kAAOSwz6Nj4pNZ/s-l1600.jpg",),
+        "EBAY_CATALOG_MODEL_COLOR",
+    ),
+    25: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/2501/gallery/"
+            "us-galaxy-s25-s938-sm-s938uzbaxaa-544887986",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    26: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/2501/gallery/"
+            "us-galaxy-s25-s938-sm-s938uzkaxaa-544888023",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    27: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/2501/gallery/"
+            "us-galaxy-s25-s938-sm-s938uzsaxaa-544888060",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    28: (
+        (
+            "https://images.samsung.com/is/image/samsung/p6pim/us/2501/gallery/"
+            "us-galaxy-s25-s938-sm-s938uztaxaa-544888097",
+        ),
+        "SAMSUNG_OFFICIAL",
+    ),
+    29: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw4e91d6eb/"
+            "1_JBL_FLIP6_HERO_BLACK_29391_x2.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    30: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw3b5c0498/"
+            "JBL_FLIP_7_HERO_PINK_068_x1.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    31: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dwa1a4a194/"
+            "JBL_FLIP_7_HERO_PURPLE_079_x2.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    32: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw96fc93ec/"
+            "JBL_GO_4_HERO_BLACK_48156_x4.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    33: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw47165508/"
+            "JBL_GO_4_FRONT_RED_48185_x1.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    34: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dwb12e221d/"
+            "JBL_GO_4_FRONT_PURPLE_48186_x1.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    35: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw15debaca/"
+            "JBL_GO_4_HERO_BLUE_48170_x6.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    36: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw9a696ae8/"
+            "JBL_GO_4_FRONT_White_48184_x1.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    37: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dwf4fb1f8d/"
+            "JBL_CLIP_5_HERO_BLACK_48128_x6.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    40: (
+        (
+            "https://www.jbl.com/dw/image/v2/BFND_PRD/on/demandware.static/-/"
+            "Sites-masterCatalog_Harman/default/dw6d0063be/"
+            "JBL_WIND_3_HERO_MOUNT_35254_x1.png?sh=535&sw=535",
+        ),
+        "JBL_OFFICIAL",
+    ),
+    43: (
+        ("https://i.ebayimg.com/images/g/Wx4AAOSwSfljmu4X/s-l1600.jpg",),
+        "EBAY_CATALOG_MODEL_COLOR",
+    ),
+    46: (
+        ("https://i.ebayimg.com/images/g/GWwAAOSwAi1jmwM3/s-l1600.jpg",),
+        "EBAY_CATALOG_MODEL_COLOR",
+    ),
+    67: (
+        ("https://i.ebayimg.com/images/g/WYwAAOSwaRRiyqG3/s-l640.jpg",),
+        "EBAY_CATALOG_MODEL_COLOR",
+    ),
+    72: (
+        ("https://i.ebayimg.com/images/g/dLcAAOSw57pjIcWk/s-l640.jpg",),
+        "EBAY_CATALOG_MODEL_COLOR",
+    ),
+}
+
 
 @dataclass(frozen=True)
 class EbayDraftSpec:
@@ -23,6 +203,8 @@ class EbayDraftSpec:
     network: str | None = None
     connectivity: str | None = None
     catalog_query: str | None = None
+    manual_image_urls: tuple[str, ...] = ()
+    manual_image_source: str | None = None
 
     @property
     def aspects(self) -> dict[str, list[str]]:
@@ -82,6 +264,10 @@ def _spec(
     connectivity: str | None = None,
     catalog_query: str | None = None,
 ) -> EbayDraftSpec:
+    manual_image_urls, manual_image_source = MANUAL_DRAFT_IMAGES.get(
+        row,
+        ((), None),
+    )
     return EbayDraftSpec(
         sheet_row=row,
         sku=f"HW-WM-202607-{row:03d}",
@@ -98,6 +284,8 @@ def _spec(
         network=network,
         connectivity=connectivity,
         catalog_query=catalog_query or title,
+        manual_image_urls=manual_image_urls,
+        manual_image_source=manual_image_source,
     )
 
 
@@ -329,4 +517,3 @@ def inventory_sheet_missing_drafts() -> list[EbayDraftSpec]:
         )
 
     return sorted(drafts, key=lambda draft: draft.sheet_row)
-

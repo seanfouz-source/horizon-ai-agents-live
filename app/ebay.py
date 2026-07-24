@@ -94,44 +94,68 @@ class EbayClient:
                     "published": False,
                 }
                 try:
-                    candidates = await self._search_catalog_products(
-                        client,
-                        draft.catalog_query or draft.title,
-                        draft.category_id,
-                        limit=catalog_candidates_per_item,
-                    )
-                    selected = self._select_catalog_product(draft, candidates)
-                    result["catalog_candidates"] = [
-                        self._catalog_candidate_summary(candidate, draft)
-                        for candidate in candidates[:catalog_candidates_per_item]
-                    ]
-                    result["selected_catalog_product"] = (
-                        self._catalog_candidate_summary(selected, draft) if selected else None
-                    )
-                    if not selected:
-                        result["status"] = "blocked_no_catalog_image"
-                        result["message"] = "No eBay catalog product with a stock image was found."
-                        results.append(result)
-                        continue
-
-                    image_urls = self._catalog_image_urls(selected)
-                    if not image_urls:
-                        result["status"] = "blocked_no_catalog_image"
-                        result["message"] = "The selected eBay catalog product did not include a stock image."
-                        results.append(result)
-                        continue
-
-                    match = self._catalog_match(draft, selected)
-                    result["catalog_match"] = match
-                    result["image_urls"] = image_urls
-                    if not match["exact"]:
-                        result["status"] = "blocked_catalog_mismatch"
-                        result["message"] = (
-                            "The best eBay catalog result did not match the model, storage, and color "
-                            "closely enough for automatic draft creation."
+                    if draft.manual_image_urls:
+                        candidates: list[dict[str, Any]] = []
+                        selected: dict[str, Any] = {}
+                        image_urls = [
+                            url
+                            for url in self._dedupe_urls(list(draft.manual_image_urls))
+                            if url.lower().startswith("https://")
+                        ][:12]
+                        result["catalog_candidates"] = []
+                        result["selected_catalog_product"] = None
+                        result["image_source"] = draft.manual_image_source
+                        result["catalog_match"] = {
+                            "exact": True,
+                            "manual_verified_image": True,
+                        }
+                        result["image_urls"] = image_urls
+                        if not image_urls:
+                            result["status"] = "blocked_no_catalog_image"
+                            result["message"] = "The verified image override was not a secure URL."
+                            results.append(result)
+                            continue
+                    else:
+                        candidates = await self._search_catalog_products(
+                            client,
+                            draft.catalog_query or draft.title,
+                            draft.category_id,
+                            limit=catalog_candidates_per_item,
                         )
-                        results.append(result)
-                        continue
+                        selected = self._select_catalog_product(draft, candidates)
+                        result["catalog_candidates"] = [
+                            self._catalog_candidate_summary(candidate, draft)
+                            for candidate in candidates[:catalog_candidates_per_item]
+                        ]
+                        result["selected_catalog_product"] = (
+                            self._catalog_candidate_summary(selected, draft) if selected else None
+                        )
+                        if not selected:
+                            result["status"] = "blocked_no_catalog_image"
+                            result["message"] = "No eBay catalog product with a stock image was found."
+                            results.append(result)
+                            continue
+
+                        image_urls = self._catalog_image_urls(selected)
+                        if not image_urls:
+                            result["status"] = "blocked_no_catalog_image"
+                            result["message"] = (
+                                "The selected eBay catalog product did not include a stock image."
+                            )
+                            results.append(result)
+                            continue
+
+                        match = self._catalog_match(draft, selected)
+                        result["catalog_match"] = match
+                        result["image_urls"] = image_urls
+                        if not match["exact"]:
+                            result["status"] = "blocked_catalog_mismatch"
+                            result["message"] = (
+                                "The best eBay catalog result did not match the model, storage, and "
+                                "color closely enough for automatic draft creation."
+                            )
+                            results.append(result)
+                            continue
                     if not confirm:
                         result["status"] = "ready"
                         result["message"] = "Ready to create an unpublished eBay offer."
@@ -198,7 +222,7 @@ class EbayClient:
                     result["offer_created"] = True
                     result["status"] = "created_unpublished"
                     result["message"] = (
-                        "Created an unpublished eBay offer with catalog stock images. "
+                        "Created an unpublished eBay offer with verified stock images. "
                         "No publish call was made."
                     )
                 except httpx.HTTPStatusError as exc:
