@@ -213,20 +213,29 @@ class EbayClient:
         *,
         limit: int,
     ) -> list[dict[str, Any]]:
-        response = await self._get(
-            client,
-            "/commerce/catalog/v1_beta/product_summary/search",
-            params={
-                "q": query,
-                "category_id": category_id,
-                "limit": max(1, min(limit, 50)),
-            },
-            headers=self._headers(),
-        )
-        response.raise_for_status()
-        payload = response.json()
-        products = payload.get("productSummaries") or []
-        return [product for product in products if isinstance(product, dict)]
+        seller_token = self._access_token
+        catalog_token = None
+        if self._has_client_credentials():
+            catalog_token = await self._client_credentials_access_token(client)
+        if catalog_token:
+            self._access_token = catalog_token
+        try:
+            response = await self._get(
+                client,
+                "/commerce/catalog/v1_beta/product_summary/search",
+                params={
+                    "q": query,
+                    "category_id": category_id,
+                    "limit": max(1, min(limit, 50)),
+                },
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            products = payload.get("productSummaries") or []
+            return [product for product in products if isinstance(product, dict)]
+        finally:
+            self._access_token = seller_token
 
     async def _fetch_sell_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         items: list[InventoryItem] = []
