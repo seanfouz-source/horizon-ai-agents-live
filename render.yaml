@@ -62,6 +62,8 @@ services:
       - key: EBAY_REFRESH_TOKEN
         sync: false
       - key: EBAY_OAUTH_SCOPES
+        value: https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory
+      - key: EBAY_APPLICATION_OAUTH_SCOPES
         value: https://api.ebay.com/oauth/api_scope
       - key: WALMART_CLIENT_ID
         sync: false

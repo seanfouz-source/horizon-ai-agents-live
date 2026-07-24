@@ -39,6 +39,14 @@ class EbayStoreImportRequest(BaseModel):
     max_pages: int = Field(default=1, ge=1, le=10)
 
 
+class EbayDraftBatchRequest(BaseModel):
+    batch_id: str
+    offset: int = Field(default=0, ge=0)
+    max_items: int = Field(default=25, ge=1, le=25)
+    catalog_candidates_per_item: int = Field(default=10, ge=1, le=10)
+    confirm: bool = False
+
+
 WalmartProductIdType = Literal["GTIN", "UPC", "EAN", "ISBN"]
 
 

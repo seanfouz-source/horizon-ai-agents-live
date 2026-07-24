@@ -6,10 +6,12 @@ import xml.etree.ElementTree as ET
 from base64 import b64encode
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from app.config import Settings
+from app.ebay_draft_batch import EbayDraftSpec
 from app.models import InventoryItem
 
 
@@ -64,6 +66,167 @@ class EbayClient:
                 )
                 return trading_items
         return browse_items
+
+    async def prepare_unpublished_drafts(
+        self,
+        drafts: list[EbayDraftSpec],
+        *,
+        confirm: bool = False,
+        catalog_candidates_per_item: int = 10,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=45) as client:
+            await self._ensure_access_token(client)
+            for draft in drafts:
+                result: dict[str, Any] = {
+                    "sheet_row": draft.sheet_row,
+                    "sku": draft.sku,
+                    "title": draft.title,
+                    "quantity": draft.quantity,
+                    "price": draft.price,
+                    "category_id": draft.category_id,
+                    "condition": draft.condition,
+                    "status": "preview",
+                    "inventory_item_created": False,
+                    "offer_created": False,
+                    "published": False,
+                }
+                try:
+                    candidates = await self._search_catalog_products(
+                        client,
+                        draft.catalog_query or draft.title,
+                        draft.category_id,
+                        limit=catalog_candidates_per_item,
+                    )
+                    selected = self._select_catalog_product(draft, candidates)
+                    result["catalog_candidates"] = [
+                        self._catalog_candidate_summary(candidate, draft)
+                        for candidate in candidates[:catalog_candidates_per_item]
+                    ]
+                    result["selected_catalog_product"] = (
+                        self._catalog_candidate_summary(selected, draft) if selected else None
+                    )
+                    if not selected:
+                        result["status"] = "blocked_no_catalog_image"
+                        result["message"] = "No eBay catalog product with a stock image was found."
+                        results.append(result)
+                        continue
+
+                    image_urls = self._catalog_image_urls(selected)
+                    if not image_urls:
+                        result["status"] = "blocked_no_catalog_image"
+                        result["message"] = "The selected eBay catalog product did not include a stock image."
+                        results.append(result)
+                        continue
+
+                    match = self._catalog_match(draft, selected)
+                    result["catalog_match"] = match
+                    result["image_urls"] = image_urls
+                    if not match["exact"]:
+                        result["status"] = "blocked_catalog_mismatch"
+                        result["message"] = (
+                            "The best eBay catalog result did not match the model, storage, and color "
+                            "closely enough for automatic draft creation."
+                        )
+                        results.append(result)
+                        continue
+                    if not confirm:
+                        result["status"] = "ready"
+                        result["message"] = "Ready to create an unpublished eBay offer."
+                        results.append(result)
+                        continue
+
+                    inventory_payload = self._inventory_item_payload(draft, selected, image_urls)
+                    inventory_response = await self._put_json(
+                        client,
+                        f"/sell/inventory/v1/inventory_item/{quote(draft.sku, safe='')}",
+                        json_data=inventory_payload,
+                        headers=self._headers(),
+                    )
+                    if inventory_response.status_code not in {200, 204}:
+                        result.update(self._response_error(inventory_response, "inventory_item_failed"))
+                        results.append(result)
+                        continue
+                    result["inventory_item_created"] = True
+
+                    offers_response = await self._get(
+                        client,
+                        "/sell/inventory/v1/offer",
+                        params={"sku": draft.sku, "limit": 10},
+                        headers=self._headers(),
+                    )
+                    if offers_response.status_code not in {200, 404}:
+                        result.update(self._response_error(offers_response, "offer_lookup_failed"))
+                        results.append(result)
+                        continue
+                    existing_offers = (
+                        offers_response.json().get("offers", [])
+                        if offers_response.status_code == 200
+                        else []
+                    )
+                    unpublished_offer = next(
+                        (
+                            offer
+                            for offer in existing_offers
+                            if not (offer.get("listing") or {}).get("listingId")
+                            and not offer.get("listingId")
+                        ),
+                        None,
+                    )
+                    if unpublished_offer:
+                        result["offer_id"] = unpublished_offer.get("offerId")
+                        result["offer_created"] = True
+                        result["status"] = "existing_unpublished"
+                        result["message"] = "An unpublished offer already exists for this SKU."
+                        results.append(result)
+                        continue
+
+                    offer_response = await self._post_json(
+                        client,
+                        "/sell/inventory/v1/offer",
+                        json_data=self._offer_payload(draft),
+                        headers=self._headers(),
+                    )
+                    if offer_response.status_code not in {200, 201}:
+                        result.update(self._response_error(offer_response, "offer_create_failed"))
+                        results.append(result)
+                        continue
+                    offer_payload = offer_response.json() if offer_response.content else {}
+                    result["offer_id"] = offer_payload.get("offerId")
+                    result["offer_created"] = True
+                    result["status"] = "created_unpublished"
+                    result["message"] = (
+                        "Created an unpublished eBay offer with catalog stock images. "
+                        "No publish call was made."
+                    )
+                except httpx.HTTPError as exc:
+                    result["status"] = "api_error"
+                    result["message"] = self._safe_http_error(exc)
+                results.append(result)
+        return results
+
+    async def _search_catalog_products(
+        self,
+        client: httpx.AsyncClient,
+        query: str,
+        category_id: str,
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        response = await self._get(
+            client,
+            "/commerce/catalog/v1_beta/product_summary/search",
+            params={
+                "q": query,
+                "category_id": category_id,
+                "limit": max(1, min(limit, 50)),
+            },
+            headers=self._headers(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        products = payload.get("productSummaries") or []
+        return [product for product in products if isinstance(product, dict)]
 
     async def _fetch_sell_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         items: list[InventoryItem] = []
@@ -707,7 +870,14 @@ class EbayClient:
     async def _client_credentials_access_token(self, client: httpx.AsyncClient) -> str | None:
         client_id = str(getattr(self.settings, "ebay_client_id", "") or "").strip()
         client_secret = str(getattr(self.settings, "ebay_client_secret", "") or "").strip()
-        scopes = str(getattr(self.settings, "ebay_oauth_scopes", "") or "").strip()
+        scopes = str(
+            getattr(
+                self.settings,
+                "ebay_application_oauth_scopes",
+                "https://api.ebay.com/oauth/api_scope",
+            )
+            or ""
+        ).strip()
         if not client_id or not client_secret:
             return None
 
@@ -1082,6 +1252,178 @@ class EbayClient:
             deduped.append(clean_url)
         return deduped
 
+    @staticmethod
+    def _catalog_candidate_text(candidate: dict[str, Any]) -> str:
+        values: list[str] = [str(candidate.get("title") or "")]
+        brand = candidate.get("brand")
+        if brand:
+            values.append(str(brand))
+        aspects = candidate.get("aspects")
+        if isinstance(aspects, list):
+            for aspect in aspects:
+                if not isinstance(aspect, dict):
+                    continue
+                values.append(str(aspect.get("localizedName") or ""))
+                localized_values = aspect.get("localizedValues")
+                if isinstance(localized_values, list):
+                    values.extend(str(value) for value in localized_values)
+        return EbayClient._normalized_match_text(" ".join(values))
+
+    @staticmethod
+    def _normalized_match_text(value: object) -> str:
+        text = str(value or "").lower()
+        text = re.sub(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", text)
+        return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+    @staticmethod
+    def _match_tokens(value: object) -> list[str]:
+        return [token for token in EbayClient._normalized_match_text(value).split() if token]
+
+    @staticmethod
+    def _catalog_match(draft: EbayDraftSpec, candidate: dict[str, Any]) -> dict[str, Any]:
+        candidate_text = EbayClient._catalog_candidate_text(candidate)
+        candidate_tokens = set(candidate_text.split())
+        stop_tokens = {"apple", "samsung", "motorola", "jbl", "galaxy"}
+        model_tokens = [
+            token
+            for token in EbayClient._match_tokens(draft.model)
+            if token not in stop_tokens
+        ]
+        storage_tokens = EbayClient._match_tokens(draft.storage)
+        color_tokens = EbayClient._match_tokens(draft.color)
+
+        missing_model = [token for token in model_tokens if token not in candidate_tokens]
+        missing_storage = [token for token in storage_tokens if token not in candidate_tokens]
+        missing_color = [token for token in color_tokens if token not in candidate_tokens]
+        exact = not (missing_model or missing_storage or missing_color)
+        score = (
+            sum(6 for token in model_tokens if token in candidate_tokens)
+            + sum(4 for token in storage_tokens if token in candidate_tokens)
+            + sum(3 for token in color_tokens if token in candidate_tokens)
+        )
+        return {
+            "exact": exact,
+            "score": score,
+            "missing_model_tokens": missing_model,
+            "missing_storage_tokens": missing_storage,
+            "missing_color_tokens": missing_color,
+        }
+
+    @staticmethod
+    def _select_catalog_product(
+        draft: EbayDraftSpec,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        candidates_with_images = [
+            candidate
+            for candidate in candidates
+            if EbayClient._catalog_image_urls(candidate)
+        ]
+        if not candidates_with_images:
+            return None
+        return max(
+            candidates_with_images,
+            key=lambda candidate: (
+                bool(EbayClient._catalog_match(draft, candidate)["exact"]),
+                int(EbayClient._catalog_match(draft, candidate)["score"]),
+            ),
+        )
+
+    @staticmethod
+    def _catalog_image_urls(candidate: dict[str, Any]) -> list[str]:
+        urls: list[str] = []
+        primary = candidate.get("image")
+        if isinstance(primary, dict) and primary.get("imageUrl"):
+            urls.append(str(primary["imageUrl"]))
+        additional = candidate.get("additionalImages")
+        if isinstance(additional, list):
+            for image in additional:
+                if isinstance(image, dict) and image.get("imageUrl"):
+                    urls.append(str(image["imageUrl"]))
+        return [
+            url
+            for url in EbayClient._dedupe_urls(urls)
+            if url.lower().startswith("https://")
+        ][:12]
+
+    @staticmethod
+    def _catalog_candidate_summary(
+        candidate: dict[str, Any],
+        draft: EbayDraftSpec,
+    ) -> dict[str, Any]:
+        return {
+            "epid": candidate.get("epid"),
+            "title": candidate.get("title"),
+            "image_urls": EbayClient._catalog_image_urls(candidate),
+            "match": EbayClient._catalog_match(draft, candidate),
+        }
+
+    @staticmethod
+    def _inventory_item_payload(
+        draft: EbayDraftSpec,
+        catalog_product: dict[str, Any],
+        image_urls: list[str],
+    ) -> dict[str, Any]:
+        product: dict[str, Any] = {
+            "title": draft.title,
+            "description": draft.description,
+            "aspects": draft.aspects,
+            "brand": draft.brand,
+            "imageUrls": image_urls,
+        }
+        epid = str(catalog_product.get("epid") or "").strip()
+        if epid:
+            product["epid"] = epid
+        payload: dict[str, Any] = {
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": draft.quantity,
+                }
+            },
+            "condition": draft.condition,
+            "product": product,
+        }
+        if draft.condition_description:
+            payload["conditionDescription"] = draft.condition_description
+        return payload
+
+    def _offer_payload(self, draft: EbayDraftSpec) -> dict[str, Any]:
+        return {
+            "sku": draft.sku,
+            "marketplaceId": self.settings.ebay_marketplace_id,
+            "format": "FIXED_PRICE",
+            "availableQuantity": draft.quantity,
+            "categoryId": draft.category_id,
+            "listingDescription": draft.description,
+            "listingDuration": "GTC",
+            "pricingSummary": {
+                "price": {
+                    "value": f"{draft.price:.2f}",
+                    "currency": "USD",
+                }
+            },
+        }
+
+    @staticmethod
+    def _response_error(response: httpx.Response, status: str) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"message": response.text[:500]}
+        return {
+            "status": status,
+            "http_status": response.status_code,
+            "error": payload,
+            "message": f"eBay returned HTTP {response.status_code}.",
+        }
+
+    @staticmethod
+    def _safe_http_error(exc: httpx.HTTPError) -> str:
+        response = getattr(exc, "response", None)
+        if isinstance(response, httpx.Response):
+            return f"eBay returned HTTP {response.status_code}."
+        return f"eBay request failed: {exc.__class__.__name__}."
+
     async def _get(
         self,
         client: httpx.AsyncClient,
@@ -1101,6 +1443,38 @@ class EbayClient:
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         return await self._request_with_retry(client, "POST", path, data=data, headers=headers)
+
+    async def _post_json(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        json_data: dict[str, object],
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return await self._request_with_retry(
+            client,
+            "POST",
+            path,
+            json_data=json_data,
+            headers=headers,
+        )
+
+    async def _put_json(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        json_data: dict[str, object],
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return await self._request_with_retry(
+            client,
+            "PUT",
+            path,
+            json_data=json_data,
+            headers=headers,
+        )
 
     async def _post_content(
         self,
@@ -1126,6 +1500,7 @@ class EbayClient:
         *,
         params: dict[str, object] | None = None,
         data: dict[str, object] | None = None,
+        json_data: dict[str, object] | None = None,
         content: bytes | str | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
@@ -1135,8 +1510,12 @@ class EbayClient:
                 if method == "POST":
                     if content is not None:
                         response = await client.post(path, content=content, headers=headers)
+                    elif json_data is not None:
+                        response = await client.post(path, json=json_data, headers=headers)
                     else:
                         response = await client.post(path, data=data, headers=headers)
+                elif method == "PUT":
+                    response = await client.put(path, json=json_data, headers=headers)
                 else:
                     response = await client.get(path, params=params, headers=headers)
             except httpx.HTTPError as exc:
@@ -1175,8 +1554,12 @@ class EbayClient:
                 if method == "POST":
                     if content is not None:
                         response = await client.post(path, content=content, headers=headers)
+                    elif json_data is not None:
+                        response = await client.post(path, json=json_data, headers=headers)
                     else:
                         response = await client.post(path, data=data, headers=headers)
+                elif method == "PUT":
+                    response = await client.put(path, json=json_data, headers=headers)
                 else:
                     response = await client.get(path, params=params, headers=headers)
             return response
@@ -1190,6 +1573,8 @@ class EbayClient:
             return False
         try:
             if path.startswith("/buy/browse/") and self._has_client_credentials():
+                token = await self._client_credentials_access_token(client)
+            elif path.startswith("/commerce/catalog/") and self._has_client_credentials():
                 token = await self._client_credentials_access_token(client)
             elif self._has_refresh_credentials():
                 token = await self._refresh_access_token(client)

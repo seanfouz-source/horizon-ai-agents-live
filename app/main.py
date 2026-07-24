@@ -25,6 +25,10 @@ from app.agents import (
 from app.campaigns import campaign_video_catalog, campaign_video_path
 from app.config import get_settings
 from app.ebay import EbayClient
+from app.ebay_draft_batch import (
+    EBAY_INVENTORY_SHEET_BATCH_ID,
+    inventory_sheet_missing_drafts,
+)
 from app.integrations import extract_customer_message, manychat_dynamic_response, normalize_channel, zapier_social_drafts_response
 from app.inventory import InventoryRepository
 from app.inventory_seed import seed_inventory_if_empty
@@ -32,6 +36,7 @@ from app.media import product_card_for_item, product_card_jpeg_for_item, tiktok_
 from app.models import (
     CustomerQuestion,
     CustomerAnswer,
+    EbayDraftBatchRequest,
     EbayStoreImportRequest,
     GroupOutreachRequest,
     GroupReplyRequest,
@@ -88,6 +93,14 @@ ebay_sync_status: dict[str, Any] = {
     "message": "eBay API sync has not run yet.",
     "last_attempt_at": None,
 }
+ebay_draft_status: dict[str, Any] = {
+    "status": "not_run",
+    "batch_id": EBAY_INVENTORY_SHEET_BATCH_ID,
+    "created_unpublished": 0,
+    "published": 0,
+    "message": "The inventory-sheet eBay draft batch has not run yet.",
+    "last_attempt_at": None,
+}
 walmart_sync_status: dict[str, Any] = {
     "status": "not_run",
     "configured": walmart_client.configured,
@@ -121,6 +134,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "service": settings.app_name,
         "ebay_sync": ebay_sync_status,
+        "ebay_drafts": ebay_draft_status,
         "store_sync": store_syncer.last_status,
         "walmart_sync": walmart_sync_status,
         "walmart_drafts": {
@@ -946,6 +960,89 @@ async def sync_ebay_inventory(
 ) -> dict[str, Any]:
     verify_secret(x_horizon_secret, request.query_params.get("secret"))
     return await _sync_ebay_api_inventory()
+
+
+@app.get("/ebay/drafts/inventory-sheet")
+def ebay_inventory_sheet_draft_manifest(
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    drafts = inventory_sheet_missing_drafts()
+    return {
+        "batch_id": EBAY_INVENTORY_SHEET_BATCH_ID,
+        "total": len(drafts),
+        "published": False,
+        "drafts": [draft.to_dict() for draft in drafts],
+        "last_run": ebay_draft_status,
+    }
+
+
+@app.post("/ebay/drafts/inventory-sheet")
+async def create_ebay_inventory_sheet_drafts(
+    draft_request: EbayDraftBatchRequest,
+    request: Request,
+    x_horizon_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    global ebay_draft_status
+    verify_secret(x_horizon_secret, request.query_params.get("secret"))
+    if draft_request.batch_id != EBAY_INVENTORY_SHEET_BATCH_ID:
+        raise HTTPException(status_code=403, detail="The eBay draft batch ID is not authorized.")
+
+    all_drafts = inventory_sheet_missing_drafts()
+    selected_drafts = all_drafts[
+        draft_request.offset : draft_request.offset + draft_request.max_items
+    ]
+    if not selected_drafts:
+        raise HTTPException(status_code=422, detail="The requested eBay draft batch slice is empty.")
+
+    try:
+        results = await EbayClient(settings).prepare_unpublished_drafts(
+            selected_drafts,
+            confirm=draft_request.confirm,
+            catalog_candidates_per_item=draft_request.catalog_candidates_per_item,
+        )
+    except (RuntimeError, httpx.HTTPError) as exc:
+        ebay_draft_status = {
+            "status": "failed",
+            "batch_id": draft_request.batch_id,
+            "created_unpublished": 0,
+            "published": 0,
+            "message": f"eBay draft preparation failed: {exc.__class__.__name__}.",
+            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+        }
+        raise HTTPException(status_code=503, detail=ebay_draft_status) from exc
+
+    status_counts: dict[str, int] = {}
+    for result in results:
+        status = str(result.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    created = sum(
+        1
+        for result in results
+        if result.get("status") in {"created_unpublished", "existing_unpublished"}
+    )
+    ebay_draft_status = {
+        "status": "created_unpublished" if draft_request.confirm else "previewed",
+        "batch_id": draft_request.batch_id,
+        "offset": draft_request.offset,
+        "requested": len(selected_drafts),
+        "created_unpublished": created,
+        "published": 0,
+        "status_counts": status_counts,
+        "message": (
+            "No eBay publish endpoint was called. Offers remain unpublished."
+            if draft_request.confirm
+            else "Catalog preview completed. No eBay inventory item or offer was created."
+        ),
+        "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return {
+        **ebay_draft_status,
+        "total_batch_items": len(all_drafts),
+        "next_offset": draft_request.offset + len(selected_drafts),
+        "results": results,
+    }
 
 
 @app.post("/inventory/sync/store-page")
