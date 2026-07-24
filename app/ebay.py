@@ -199,6 +199,8 @@ class EbayClient:
                         "Created an unpublished eBay offer with catalog stock images. "
                         "No publish call was made."
                     )
+                except httpx.HTTPStatusError as exc:
+                    result.update(self._response_error(exc.response, "api_error"))
                 except httpx.HTTPError as exc:
                     result["status"] = "api_error"
                     result["message"] = self._safe_http_error(exc)
