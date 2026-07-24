@@ -170,6 +170,37 @@ class FakeDraftAsyncClient:
         raise AssertionError(f"Unexpected POST path: {path}")
 
 
+class FakeEmptyCatalogAsyncClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    async def get(self, path, params=None, headers=None):
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/commerce/catalog/v1_beta/product_summary/search":
+            return httpx.Response(200, content=b"", request=request)
+        raise AssertionError(f"Unexpected GET path: {path}")
+
+
+def test_empty_successful_catalog_response_blocks_item_without_crashing(monkeypatch):
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", FakeEmptyCatalogAsyncClient)
+    draft = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 35
+    )
+
+    results = asyncio.run(
+        EbayClient(_settings()).prepare_unpublished_drafts([draft], confirm=False)
+    )
+
+    assert results[0]["status"] == "blocked_no_catalog_image"
+    assert results[0]["published"] is False
+
+
 def test_confirmed_batch_creates_unpublished_offer_with_catalog_images(monkeypatch):
     monkeypatch.setattr(ebay_module.httpx, "AsyncClient", FakeDraftAsyncClient)
     draft = next(

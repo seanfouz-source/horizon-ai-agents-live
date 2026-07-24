@@ -230,7 +230,17 @@ class EbayClient:
             )
             if response.status_code not in {401, 403}:
                 response.raise_for_status()
-                payload = response.json()
+                if not response.content:
+                    return []
+                try:
+                    payload = response.json()
+                except ValueError:
+                    logger.warning(
+                        "eBay Catalog API returned a successful response without valid JSON "
+                        "for query %r.",
+                        query,
+                    )
+                    return []
                 products = payload.get("productSummaries") or []
                 return [product for product in products if isinstance(product, dict)]
             self._catalog_access_denied = True
