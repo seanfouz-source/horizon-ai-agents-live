@@ -94,6 +94,44 @@ class EbayClient:
                     "published": False,
                 }
                 try:
+                    if confirm:
+                        offers_response = await self._get(
+                            client,
+                            "/sell/inventory/v1/offer",
+                            params={"sku": draft.sku, "limit": 10},
+                            headers=self._headers(),
+                        )
+                        if offers_response.status_code not in {200, 404}:
+                            result.update(
+                                self._response_error(
+                                    offers_response,
+                                    "offer_lookup_failed",
+                                )
+                            )
+                            results.append(result)
+                            continue
+                        existing_offers = (
+                            offers_response.json().get("offers", [])
+                            if offers_response.status_code == 200
+                            else []
+                        )
+                        unpublished_offer = next(
+                            (
+                                offer
+                                for offer in existing_offers
+                                if not (offer.get("listing") or {}).get("listingId")
+                                and not offer.get("listingId")
+                            ),
+                            None,
+                        )
+                        if unpublished_offer:
+                            result["offer_id"] = unpublished_offer.get("offerId")
+                            result["offer_created"] = True
+                            result["status"] = "existing_unpublished"
+                            result["message"] = "An unpublished offer already exists for this SKU."
+                            results.append(result)
+                            continue
+
                     if draft.manual_image_urls:
                         candidates: list[dict[str, Any]] = []
                         selected: dict[str, Any] = {}
@@ -174,38 +212,6 @@ class EbayClient:
                         results.append(result)
                         continue
                     result["inventory_item_created"] = True
-
-                    offers_response = await self._get(
-                        client,
-                        "/sell/inventory/v1/offer",
-                        params={"sku": draft.sku, "limit": 10},
-                        headers=self._headers(),
-                    )
-                    if offers_response.status_code not in {200, 404}:
-                        result.update(self._response_error(offers_response, "offer_lookup_failed"))
-                        results.append(result)
-                        continue
-                    existing_offers = (
-                        offers_response.json().get("offers", [])
-                        if offers_response.status_code == 200
-                        else []
-                    )
-                    unpublished_offer = next(
-                        (
-                            offer
-                            for offer in existing_offers
-                            if not (offer.get("listing") or {}).get("listingId")
-                            and not offer.get("listingId")
-                        ),
-                        None,
-                    )
-                    if unpublished_offer:
-                        result["offer_id"] = unpublished_offer.get("offerId")
-                        result["offer_created"] = True
-                        result["status"] = "existing_unpublished"
-                        result["message"] = "An unpublished offer already exists for this SKU."
-                        results.append(result)
-                        continue
 
                     offer_response = await self._post_json(
                         client,

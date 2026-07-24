@@ -259,6 +259,31 @@ class FakeEmptyCatalogAsyncClient:
         raise AssertionError(f"Unexpected GET path: {path}")
 
 
+class FakeExistingDraftAsyncClient:
+    calls: list[tuple[str, str, object]] = []
+
+    def __init__(self, *args, **kwargs):
+        self.calls = []
+        FakeExistingDraftAsyncClient.calls = self.calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    async def get(self, path, params=None, headers=None):
+        self.calls.append(("GET", path, params))
+        request = httpx.Request("GET", f"https://api.ebay.com{path}")
+        if path == "/sell/inventory/v1/offer":
+            return httpx.Response(
+                200,
+                json={"offers": [{"offerId": "EXISTING-OFFER-1"}]},
+                request=request,
+            )
+        raise AssertionError(f"Existing draft unexpectedly searched catalog: {path}")
+
+
 class FakeManualImageAsyncClient:
     calls: list[tuple[str, str, object]] = []
 
@@ -321,6 +346,24 @@ def test_manual_verified_image_creates_offer_without_catalog_id(monkeypatch):
     assert not any(
         "/publish" in path for _, path, _ in FakeManualImageAsyncClient.calls
     )
+
+
+def test_existing_unpublished_offer_is_verified_before_catalog_lookup(monkeypatch):
+    monkeypatch.setattr(ebay_module.httpx, "AsyncClient", FakeExistingDraftAsyncClient)
+    draft = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 56
+    )
+
+    results = asyncio.run(
+        EbayClient(_settings()).prepare_unpublished_drafts([draft], confirm=True)
+    )
+
+    assert results[0]["status"] == "existing_unpublished"
+    assert results[0]["offer_id"] == "EXISTING-OFFER-1"
+    assert results[0]["published"] is False
+    assert FakeExistingDraftAsyncClient.calls == [
+        ("GET", "/sell/inventory/v1/offer", {"sku": draft.sku, "limit": 10})
+    ]
 
 
 def test_empty_successful_catalog_response_blocks_item_without_crashing(monkeypatch):
