@@ -1454,6 +1454,9 @@ class EbayClient:
     def _catalog_match(draft: EbayDraftSpec, candidate: dict[str, Any]) -> dict[str, Any]:
         candidate_text = EbayClient._catalog_candidate_text(candidate)
         candidate_tokens = set(candidate_text.split())
+        candidate_title = str(candidate.get("title") or "")
+        candidate_title_normalized = EbayClient._normalized_match_text(candidate_title)
+        candidate_title_tokens = set(candidate_title_normalized.split())
         stop_tokens = {"apple", "samsung", "motorola", "jbl", "galaxy"}
         model_tokens = [
             token
@@ -1464,7 +1467,24 @@ class EbayClient:
         color_tokens = EbayClient._match_tokens(draft.color)
         network_tokens = EbayClient._match_tokens(draft.network)
 
-        missing_model = [token for token in model_tokens if token not in candidate_tokens]
+        missing_model = [token for token in model_tokens if token not in candidate_title_tokens]
+        full_model_tokens = EbayClient._match_tokens(draft.model)
+        if full_model_tokens:
+            model_pattern = (
+                r"\b"
+                + r"[^a-z0-9]*".join(re.escape(token) for token in full_model_tokens)
+                + r"\b"
+            )
+            if not re.search(model_pattern, candidate_title.lower()):
+                missing_model.append("ordered_model_phrase")
+        model_qualifiers = {"mini", "pro", "max", "ultra", "plus"}
+        draft_qualifiers = set(full_model_tokens) & model_qualifiers
+        candidate_qualifiers = candidate_title_tokens & model_qualifiers
+        missing_model.extend(
+            f"unexpected_{qualifier}"
+            for qualifier in sorted(candidate_qualifiers - draft_qualifiers)
+        )
+        missing_model = list(dict.fromkeys(missing_model))
         missing_storage = [token for token in storage_tokens if token not in candidate_tokens]
         missing_color = [token for token in color_tokens if token not in candidate_tokens]
         missing_network = [token for token in network_tokens if token not in candidate_tokens]

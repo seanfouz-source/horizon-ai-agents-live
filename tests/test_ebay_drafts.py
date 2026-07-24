@@ -85,6 +85,49 @@ def test_catalog_match_requires_unlocked_network_and_can_use_same_variant_image_
     assert EbayClient._catalog_image_urls(selected)
 
 
+def test_catalog_match_rejects_scattered_model_number_and_extra_phone_variant():
+    jbl_go_4 = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 32
+    )
+    wrong_jbl = _catalog_product(
+        "JBL Go 3 4.2W Portable Waterproof Speaker - Black"
+    )
+    iphone_13 = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 59
+    )
+    wrong_iphone_mini = _catalog_product(
+        "Apple iPhone 13 mini - 256 GB - Midnight (Unlocked)"
+    )
+
+    jbl_match = EbayClient._catalog_match(jbl_go_4, wrong_jbl)
+    iphone_match = EbayClient._catalog_match(iphone_13, wrong_iphone_mini)
+
+    assert jbl_match["exact"] is False
+    assert "ordered_model_phrase" in jbl_match["missing_model_tokens"]
+    assert iphone_match["exact"] is False
+    assert "unexpected_mini" in iphone_match["missing_model_tokens"]
+
+
+def test_catalog_match_uses_product_title_for_model_identity():
+    iphone_12 = next(
+        item for item in inventory_sheet_missing_drafts() if item.sheet_row == 67
+    )
+    mislabeled = _catalog_product(
+        "Apple iPhone 13 Pro Max - 128 GB - Silver (Unlocked)"
+    )
+    mislabeled["aspects"] = [
+        {
+            "localizedName": "Compatible Model",
+            "localizedValues": ["Apple iPhone 12 Pro Max"],
+        }
+    ]
+
+    match = EbayClient._catalog_match(iphone_12, mislabeled)
+
+    assert match["exact"] is False
+    assert "12" in match["missing_model_tokens"]
+
+
 def test_browse_product_mapping_uses_only_product_stock_images():
     candidate = EbayClient._browse_product_catalog_candidate(
         {
