@@ -218,7 +218,17 @@ class EbayClient:
         seller_token = self._access_token
         catalog_token = None
         if self._has_client_credentials():
-            catalog_token = await self._client_credentials_access_token(client)
+            catalog_token = await self._client_credentials_access_token(
+                client,
+                scopes_override=str(
+                    getattr(
+                        self.settings,
+                        "ebay_catalog_oauth_scopes",
+                        "https://api.ebay.com/oauth/api_scope/sell.inventory",
+                    )
+                    or ""
+                ).strip(),
+            )
         if catalog_token:
             self._access_token = catalog_token
         try:
@@ -878,17 +888,26 @@ class EbayClient:
         logger.info("Refreshed eBay access token for inventory sync.")
         return access_token.strip()
 
-    async def _client_credentials_access_token(self, client: httpx.AsyncClient) -> str | None:
+    async def _client_credentials_access_token(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        scopes_override: str | None = None,
+    ) -> str | None:
         client_id = str(getattr(self.settings, "ebay_client_id", "") or "").strip()
         client_secret = str(getattr(self.settings, "ebay_client_secret", "") or "").strip()
-        scopes = str(
-            getattr(
-                self.settings,
-                "ebay_application_oauth_scopes",
-                "https://api.ebay.com/oauth/api_scope",
-            )
-            or ""
-        ).strip()
+        scopes = (
+            str(scopes_override).strip()
+            if scopes_override is not None
+            else str(
+                getattr(
+                    self.settings,
+                    "ebay_application_oauth_scopes",
+                    "https://api.ebay.com/oauth/api_scope",
+                )
+                or ""
+            ).strip()
+        )
         if not client_id or not client_secret:
             return None
 

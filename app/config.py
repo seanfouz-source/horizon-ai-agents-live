@@ -39,10 +39,8 @@ class Settings(BaseSettings):
         "https://api.ebay.com/oauth/api_scope "
         "https://api.ebay.com/oauth/api_scope/sell.inventory"
     )
-    ebay_application_oauth_scopes: str = (
-        "https://api.ebay.com/oauth/api_scope "
-        "https://api.ebay.com/oauth/api_scope/commerce.catalog.readonly"
-    )
+    ebay_application_oauth_scopes: str = "https://api.ebay.com/oauth/api_scope"
+    ebay_catalog_oauth_scopes: str = "https://api.ebay.com/oauth/api_scope/sell.inventory"
     ebay_marketplace_id: str = "EBAY_US"
     ebay_seller_username: str = "exactspec-electronics"
     ebay_browse_search_query: str = " "
