@@ -215,39 +215,20 @@ class EbayClient:
         *,
         limit: int,
     ) -> list[dict[str, Any]]:
-        seller_token = self._access_token
-        catalog_token = None
-        if self._has_client_credentials():
-            catalog_token = await self._client_credentials_access_token(
-                client,
-                scopes_override=str(
-                    getattr(
-                        self.settings,
-                        "ebay_catalog_oauth_scopes",
-                        "https://api.ebay.com/oauth/api_scope/sell.inventory",
-                    )
-                    or ""
-                ).strip(),
-            )
-        if catalog_token:
-            self._access_token = catalog_token
-        try:
-            response = await self._get(
-                client,
-                "/commerce/catalog/v1_beta/product_summary/search",
-                params={
-                    "q": query,
-                    "category_id": category_id,
-                    "limit": max(1, min(limit, 50)),
-                },
-                headers=self._headers(),
-            )
-            response.raise_for_status()
-            payload = response.json()
-            products = payload.get("productSummaries") or []
-            return [product for product in products if isinstance(product, dict)]
-        finally:
-            self._access_token = seller_token
+        response = await self._get(
+            client,
+            "/commerce/catalog/v1_beta/product_summary/search",
+            params={
+                "q": query,
+                "category_id": category_id,
+                "limit": max(1, min(limit, 50)),
+            },
+            headers=self._headers(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        products = payload.get("productSummaries") or []
+        return [product for product in products if isinstance(product, dict)]
 
     async def _fetch_sell_inventory_items(self, limit: int = 200) -> list[InventoryItem]:
         items: list[InventoryItem] = []
